@@ -115,7 +115,7 @@ with tab1:
     else:
         DISPLAY_COLS = [
             "title", "employer", "city", "state", "source_name",
-            "h1b_status", "j1_status", "waiver_status",
+            "posted_date", "h1b_status", "j1_status", "waiver_status",
             "salary_text", "priority_score", "priority_label",
             "apply_url", "first_seen_at",
         ]
@@ -145,6 +145,7 @@ with tab1:
             column_config={
                 "apply_url": st.column_config.LinkColumn("Apply Link"),
                 "priority_score": st.column_config.NumberColumn("Score", format="%.0f"),
+                "posted_date": st.column_config.TextColumn("Posted Date"),
                 "first_seen_at": st.column_config.DatetimeColumn("First Seen"),
             },
             on_select="rerun",

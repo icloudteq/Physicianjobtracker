@@ -9,15 +9,19 @@
 
 A local Python application that:
 1. Scrapes 20–30+ public physician job boards and hospital career pages across all 50 states
-2. Stores jobs in SQLite (deduped, enriched, ranked)
-3. Extracts salary, contact info (name/email/phone), and posting date from every job
-4. Classifies visa sponsorship signals (H1B/J1/none/unknown)
-5. Sends desktop notifications when new jobs are found
-6. Exports a daily master CSV — one row per job, all fields in one place
-7. Creates Gmail draft emails for selected jobs
-8. Provides a Streamlit dashboard for interactive control
+2. Enriches every job with historical salary data from the DOL H1B LCA public database
+3. Stores jobs in SQLite (deduped, enriched, ranked) with full salary history per employer
+4. Extracts salary, contact info (name/email/phone), and posting date from every job
+5. Classifies visa sponsorship signals (H1B/J1/none/unknown)
+6. Runs automatically every 2 hours via APScheduler — no manual trigger needed
+7. Sends desktop notifications when new jobs are found
+8. Exports a daily master CSV — one row per job, all fields in one place
+9. Creates Gmail draft emails for selected jobs
+10. Provides a Streamlit dashboard with live auto-refresh
 
-**Primary output:** One unified table/CSV with every job across all states — title, employer, city/state, salary, contact name, contact email, contact phone, H1B status, J1 status, posting date, source URL.
+**Primary output:** One unified table/CSV with every job across all states — title, employer, city/state, salary (posted + historical DOL data), contact name, contact email, contact phone, H1B status, J1 status, posting date, source URL.
+
+**Live updates:** Pipeline runs automatically every 2 hours via APScheduler. Streamlit dashboard auto-refreshes. Desktop notification on new jobs found.
 
 **Legal constraints (hard rules, never bypass):**
 - No login walls, CAPTCHA bypass, paywalls, Cloudflare bypass, or robots-restricted pages
@@ -44,13 +48,17 @@ Streamlit UI (src/dashboard.py)
    │  2. scrapers          → raw job dicts      │
    │  3. db.py             → upsert jobs        │
    │  4. dedupe            → mark duplicates    │
-   │  5. salary_parser     → enrich            │
-   │  6. contact_extractor → enrich            │
-   │  7. visa_classifier   → enrich            │
-   │  8. ranker            → priority score    │
-   │  9. exporters         → master CSV        │
-   │  10. notifier         → desktop alert     │
-   │  11. gmail_drafts     → create drafts     │
+   │  5. salary_parser     → enrich posted $   │
+   │  6. dol_salary        → enrich hist. $    │
+   │  7. contact_extractor → enrich contact    │
+   │  8. visa_classifier   → enrich visa       │
+   │  9. ranker            → priority score    │
+   │  10. exporters        → master CSV        │
+   │  11. notifier         → desktop alert     │
+   │  12. gmail_drafts     → create drafts     │
+   └────────────────────────────────────────────┘
+        ↑
+   APScheduler (runs every 2h, configurable)
    └────────────────────────────────────────────┘
         │
    SQLite (data/jobs.db via SQLAlchemy ORM)
@@ -94,6 +102,8 @@ physician_job_tracker/
     ranker.py                 # priority scoring (0-100)
     state_search.py           # generate search queries per state+term
     source_discovery.py       # DuckDuckGo search → discover employer URLs
+    dol_salary.py             # DOL H1B LCA public database salary lookup
+    scheduler.py              # APScheduler background auto-run (every 2h)
     notifier.py               # Windows desktop notifications (new jobs found)
     gmail_drafts.py           # Gmail API v1 OAuth2 draft creation
     exporters.py              # master CSV + Jinja2 summary report
@@ -221,9 +231,13 @@ Contains:
 | state | TEXT | |
 | specialty | TEXT | matched specialty term |
 | job_type | TEXT | full_time \| part_time \| locum \| unknown |
-| salary_text | TEXT | raw extracted salary snippet |
-| salary_min | INTEGER | annualized |
-| salary_max | INTEGER | annualized |
+| salary_text | TEXT | raw extracted salary snippet from posting |
+| salary_min | INTEGER | annualized, from posting |
+| salary_max | INTEGER | annualized, from posting |
+| dol_salary_min | INTEGER | historical min wage from DOL LCA data |
+| dol_salary_max | INTEGER | historical max wage from DOL LCA data |
+| dol_salary_year | INTEGER | most recent DOL LCA year available |
+| dol_case_count | INTEGER | number of LCA filings found for this employer+title |
 | visa_text | TEXT | raw extracted visa snippet |
 | h1b_status | TEXT | confirmed \| possible \| no \| unknown |
 | j1_status | TEXT | confirmed \| possible \| no \| unknown |
@@ -283,6 +297,21 @@ Contains:
 | gmail_draft_id | TEXT |
 | created_at | DATETIME UTC |
 | status | TEXT |
+
+### dol_lca_cache
+Local cache of downloaded DOL LCA records — avoids re-downloading on every run.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| employer_name | TEXT | normalized |
+| job_title | TEXT | normalized |
+| state | TEXT | |
+| wage_min | INTEGER | annualized |
+| wage_max | INTEGER | annualized |
+| lca_year | INTEGER | fiscal year of filing |
+| case_count | INTEGER | filings found |
+| fetched_at | DATETIME UTC | when this cache entry was built |
 
 ### manual_reviews
 | Column | Type |
@@ -446,7 +475,60 @@ Score 0–100, assigned at upsert time and recalculated on each scrape:
 
 ---
 
-## 12. Contact Extractor (src/contact_extractor.py)
+## 12. DOL Historical Salary Lookup (src/dol_salary.py)
+
+**Source:** US Department of Labor H1B LCA (Labor Condition Application) Disclosure Data  
+**URL:** `https://www.dol.gov/agencies/eta/foreign-labor/performance` (public, free, legally required to be disclosed)  
+**Format:** Quarterly Excel/CSV downloads, also queryable via OFLC API
+
+**What it provides:**
+- Exact wage ranges employers offered H1B workers
+- Searchable by employer name, job title, state, year
+- Updated quarterly — most accurate public salary benchmark for physician H1B roles
+- Shows if an employer has a history of H1B filings (strong sponsorship signal)
+
+**How it works in our pipeline:**
+1. On first run: download the most recent DOL LCA dataset (Excel, ~150MB) → store in `data/dol_lca/`
+2. Parse into `dol_lca_cache` SQLite table (one-time import, ~5 min)
+3. On each job upsert: lookup by normalized `(employer_name, state, specialty_group)` → fuzzy match employer name (RapidFuzz threshold 85)
+4. Write `dol_salary_min`, `dol_salary_max`, `dol_salary_year`, `dol_case_count` to job record
+5. Refresh DOL dataset monthly (configurable)
+
+**Specialty group mapping:**
+```python
+IM_GROUP = ["Physician", "Internal Medicine", "Hospitalist", "Primary Care"]
+FM_GROUP = ["Family Medicine", "Family Practice", "Family Physician"]
+```
+Lookup uses the broadest matching group to maximize cache hits.
+
+**Output in master CSV:**
+- `salary_posted` — from job posting text (current)
+- `dol_salary_min` / `dol_salary_max` — from DOL LCA (historical)
+- `dol_year` — year of DOL data
+- `dol_filings` — number of H1B filings found (high count = reliable sponsor)
+
+---
+
+## 13. Live Updates & Scheduler (src/scheduler.py)
+
+**APScheduler** runs the pipeline automatically in the background.
+
+**Schedule:** Every 2 hours (configurable in `.env` as `POLL_INTERVAL_HOURS=2`)
+
+**Modes:**
+1. **Background mode** — `python -m src.scheduler` starts APScheduler as a background process; Streamlit dashboard connects to the same SQLite DB and auto-refreshes
+2. **Integrated mode** — Streamlit app launches the scheduler on startup (single process)
+
+**Streamlit auto-refresh:**
+- `st.rerun()` called every 60 seconds via `streamlit-autorefresh` component
+- Badge shows "Last updated: 4 min ago" and "Next run in: 1h 56m"
+- New jobs since last page load highlighted in yellow
+
+**Run log:** Every scheduled run writes a `scrape_runs` entry. Dashboard shows run history with timestamps and new-job counts.
+
+---
+
+## 15. Contact Extractor (src/contact_extractor.py)
 
 Extracts publicly listed contact info from the job posting text only. Never fetches hidden data.
 
@@ -464,7 +546,7 @@ Rules:
 
 ---
 
-## 13. Posting Date Extraction
+## 16. Posting Date Extraction
 
 Every scraper attempts to extract `posted_date` from:
 - Structured `datetime` attributes (ISO 8601 preferred)
@@ -476,7 +558,7 @@ If extraction fails: `posted_date = NULL`, `posted_date_raw = NULL`. Never guess
 
 ---
 
-## 14. Notifications (src/notifier.py)
+## 17. Notifications (src/notifier.py)
 
 Windows desktop toast notification after each pipeline run:
 ```
@@ -487,20 +569,20 @@ Uses `plyer` library (cross-platform, no external service needed). Triggered at 
 
 ---
 
-## 15. Exports (src/exporters.py)
+## 18. Exports (src/exporters.py)
 
 Output dir: `data/exports/YYYY-MM-DD/`
 
 | File | Contents |
 |---|---|
-| `master_jobs.csv` | **Primary output.** All deduped jobs, all fields: title, employer, city, state, salary_min, salary_max, contact_name, contact_email, contact_phone, h1b_status, j1_status, posted_date, source_url, priority_label |
+| `master_jobs.csv` | **Primary output.** All deduped jobs, all fields: title, employer, city, state, salary_min, salary_max, dol_salary_min, dol_salary_max, dol_year, dol_filings, contact_name, contact_email, contact_phone, h1b_status, j1_status, posted_date, source_url, priority_label |
 | `jobs_high_priority.csv` | HIGH priority only, same columns |
 | `daily_summary.txt` | Jinja2 rendered from `templates/daily_summary.txt` |
 | `scrape_report.txt` | Per-source: found / new / dupes / errors / blocked |
 
 ---
 
-## 16. Gmail Drafts (src/gmail_drafts.py)
+## 19. Gmail Drafts (src/gmail_drafts.py)
 
 - Gmail API v1, OAuth2 flow
 - `credentials.json` from Google Cloud Console (stored in `.env` path)
@@ -512,7 +594,7 @@ Output dir: `data/exports/YYYY-MM-DD/`
 
 ---
 
-## 17. Streamlit Dashboard (src/dashboard.py)
+## 20. Streamlit Dashboard (src/dashboard.py)
 
 Four tabs:
 
@@ -523,11 +605,13 @@ Four tabs:
 - Live log output in text area showing per-source progress
 
 **Tab 2 — Browse Jobs**
-- Master table: all jobs with columns — title, employer, city, state, salary, contact name, contact email, contact phone, H1B, J1, posted date, source URL, priority
-- Filter bar: state, visa status (H1B/J1), priority label, employer type, specialty (IM/FM), posting date range
+- Master table: all jobs — title, employer, city, state, salary (posted), DOL salary (historical), DOL filings count, contact name, contact email, contact phone, H1B, J1, posted date, source URL, priority
+- Filter bar: state, visa status (H1B/J1), priority label, employer type, specialty (IM/FM), posting date range, salary range
 - Click row → side panel: full detail + "Create Gmail Draft" button
 - "Mark Reviewed / Applied / Rejected" status buttons
 - "Download filtered view as CSV" button
+- New jobs (since last refresh) highlighted in yellow
+- "Last updated" timestamp + "Next auto-run in Xh Xm" counter
 
 **Tab 3 — Exports**
 - List past export run directories with job counts
@@ -542,7 +626,7 @@ Four tabs:
 
 ---
 
-## 18. Error Handling
+## 21. Error Handling
 
 - Every scraper wrapped in `try/except`; failure logged to `data/logs/YYYY-MM-DD.log` and `scrape_runs` table; pipeline continues
 - `robots.txt` checked via `urllib.robotparser` before every new domain; disallowed → skip + log
@@ -552,7 +636,7 @@ Four tabs:
 
 ---
 
-## 19. Tech Stack
+## 22. Tech Stack
 
 | Component | Library |
 |---|---|
@@ -570,6 +654,8 @@ Four tabs:
 | Email | Gmail API v1 (`google-api-python-client`) |
 | Templates | `jinja2` |
 | Dashboard | `streamlit` |
+| Scheduler | `apscheduler` |
+| Dashboard refresh | `streamlit-autorefresh` |
 | Notifications | `plyer` |
 | Regex | stdlib `re` |
 | Hashing | stdlib `hashlib` |
@@ -579,7 +665,7 @@ Python 3.11+. All dependencies pinned in `requirements.txt`.
 
 ---
 
-## 20. Environment Variables (.env)
+## 23. Environment Variables (.env)
 
 ```
 GMAIL_CREDENTIALS_PATH=config/credentials.json
@@ -588,11 +674,14 @@ GMAIL_SENDER_EMAIL=your@gmail.com
 DB_PATH=data/jobs.db
 LOG_DIR=data/logs
 EXPORT_DIR=data/exports
+POLL_INTERVAL_HOURS=2
+DOL_DATA_DIR=data/dol_lca
+DOL_REFRESH_DAYS=30
 ```
 
 ---
 
-## 21. Out of Scope (MVP)
+## 24. Out of Scope (MVP)
 
 - Cloud hosting / remote access
 - Multi-user support

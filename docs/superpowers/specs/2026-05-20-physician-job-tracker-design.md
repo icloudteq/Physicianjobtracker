@@ -187,14 +187,19 @@ candidate:
   candidate_name: "[Candidate Name]"
   sender_name: "[Your Name]"
   sender_email: "[Your Email]"
-  preferred_states: [TX, NM, AZ]
+  preferred_states: [NC, SC]
 ```
 
 ### config/sources.yaml
 Contains:
 - Per-source enable/disable flags and scrape method (`httpx` | `playwright` | `csv_only`)
 - Pre-curated national employer career URLs (major health systems, academic medical centers, VA portals, FQHC networks across all 50 states)
-  Examples: HCA Healthcare, Tenet, CommonSpirit, Ascension, Kaiser, Mayo Clinic, Cleveland Clinic, Johns Hopkins, UCSF, Baylor Scott & White, Mass General Brigham, all VA regional portals, FQHC networks by state
+  **NC/SC priority employers (pre-loaded):**
+  - Duke Health, UNC Health, Atrium Health (Carolinas Medical), Novant Health, WakeMed, ECU Health (Vidant), Cone Health, CaroMont Health, Cape Fear Valley Health, FirstHealth of the Carolinas
+  - MUSC (Medical University of SC), Prisma Health, Tidelands Health, Roper St. Francis, AnMed Health, Conway Medical Center, McLeod Health, Palmetto Health
+  - VA medical centers: Durham VA, Fayetteville VA, Asheville VA, Salisbury VA, Columbia SC VA, Charleston SC VA
+  - UNC School of Medicine, Duke School of Medicine, Wake Forest School of Medicine, MUSC faculty positions
+  - National systems with large NC/SC presence: HCA Healthcare, Novant, Tenet, CommonSpirit
 - Manual employer URL additions via Streamlit UI or direct YAML edit
 
 ---
@@ -426,6 +431,7 @@ Score 0–100, assigned at upsert time and recalculated on each scrape:
 | H1B confirmed | +20 |
 | J1 confirmed | +15 |
 | Direct employer (not recruiter) | +10 |
+| Job in NC or SC (preferred states) | +20 |
 | Contact info present (name/email/phone) | +10 |
 | Academic / university employer | +8 |
 | FQHC / rural / underserved | +8 |
@@ -511,7 +517,7 @@ Output dir: `data/exports/YYYY-MM-DD/`
 Four tabs:
 
 **Tab 1 — Run Pipeline**
-- Multi-select: states (all 50, default all enabled)
+- Multi-select: states (all 50; NC and SC checked by default, others opt-in)
 - Multi-select: specialty terms (IM + FM terms pre-selected)
 - "Run Now" button → calls `main.run_pipeline(states, terms)`
 - Live log output in text area showing per-source progress

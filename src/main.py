@@ -5,6 +5,8 @@ Run: python -m src.main --states NC SC --terms "Internal Medicine Physician" "Ho
 import argparse
 import sys
 from pathlib import Path
+
+sys.stdout.reconfigure(encoding="utf-8")
 from typing import List
 
 from src.db import init_db, upsert_job, log_scrape_run, finish_scrape_run, get_jobs

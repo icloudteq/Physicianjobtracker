@@ -1,0 +1,546 @@
+# Physician Job Intelligence Tool — Design Spec
+**Date:** 2026-05-20  
+**Status:** Approved  
+**Purpose:** Private daily job intelligence tool for Internal Medicine physician job search across TX, NM, AZ, OK, LA.
+
+---
+
+## 1. Overview
+
+A local Python application that:
+1. Scrapes public physician job boards and hospital career pages
+2. Stores jobs in SQLite (deduped, enriched, ranked)
+3. Classifies visa sponsorship and salary signals
+4. Exports daily CSV reports
+5. Creates Gmail draft emails for selected jobs
+6. Provides a Streamlit dashboard for interactive control
+
+**Legal constraints (hard rules, never bypass):**
+- No login walls, CAPTCHA bypass, paywalls, Cloudflare bypass, or robots-restricted pages
+- No scraping hidden recruiter emails or private contact data
+- No fake accounts
+- Store short summaries only — never full job descriptions
+- Always store and display original source URL
+- If a source blocks scraping: skip, log reason, continue
+- Gmail drafts only — never auto-send
+
+---
+
+## 2. Architecture
+
+```
+Streamlit UI (src/dashboard.py)
+        │
+        ▼
+    src/main.py  ←── CLI: python -m src.main --states TX NM --run
+        │
+   ┌────┴──────────────────────────────────────┐
+   │           Pipeline Orchestrator            │
+   │  1. state_search    → discover URLs        │
+   │  2. scrapers        → raw job dicts        │
+   │  3. db.py           → upsert jobs          │
+   │  4. dedupe          → mark duplicates      │
+   │  5. salary_parser   → enrich              │
+   │  6. visa_classifier → enrich              │
+   │  7. ranker          → priority score      │
+   │  8. exporters       → CSV + report        │
+   │  9. gmail_drafts    → create drafts       │
+   └────────────────────────────────────────────┘
+        │
+   SQLite (data/jobs.db via SQLAlchemy ORM)
+```
+
+Each stage is a pure function or class. No shared global state. The orchestrator calls stages in sequence. The Streamlit UI calls the orchestrator with user-selected params. Pipeline can also run headless (scheduled task).
+
+---
+
+## 3. Folder Structure
+
+```
+physician_job_tracker/
+  .env.example
+  .env                        # gitignored
+  requirements.txt
+  README.md
+  config/
+    sources.yaml              # enabled sources, hospital career URLs
+    search_terms.yaml         # specialty terms, visa terms, candidate info
+    states.yaml               # state configs with preferred cities
+    email_templates.yaml      # email subject/body config
+  data/
+    jobs.db
+    exports/                  # YYYY-MM-DD/ subdirs per run
+    manual_imports/           # CSV files for gated sources
+    logs/                     # per-run scrape logs
+  docs/
+    superpowers/
+      specs/                  # this file
+  src/
+    __init__.py
+    main.py                   # pipeline orchestrator + CLI entrypoint
+    db.py                     # SQLAlchemy models + init_db()
+    models.py                 # Pydantic models: RawJob, Job, ScrapeRun
+    logger.py                 # structured logging to file + console
+    dedupe.py                 # exact hash + RapidFuzz fuzzy dedup
+    salary_parser.py          # regex salary extraction + normalization
+    visa_classifier.py        # strict regex visa signal classification
+    ranker.py                 # priority scoring (0-100)
+    state_search.py           # generate search queries per state+term
+    source_discovery.py       # DuckDuckGo search → discover employer URLs
+    gmail_drafts.py           # Gmail API v1 OAuth2 draft creation
+    exporters.py              # CSV + Jinja2 summary report generation
+    dashboard.py              # Streamlit UI
+    scrapers/
+      __init__.py
+      base.py                 # BaseScraper ABC
+      doccafe.py
+      practicelink.py
+      practicematch_public.py # placeholder + CSV import path
+      nejm.py
+      health_ecareers.py
+      jama_career.py
+      hospital_recruiting.py
+      generic_hospital.py     # reusable for any hospital career page
+      google_search_import.py # manual search result CSV importer
+      csv_importer.py         # generic CSV import for any gated source
+  templates/
+    daily_summary.txt         # Jinja2
+    job_email_draft.txt       # Jinja2
+```
+
+---
+
+## 4. Configuration Files
+
+### config/states.yaml
+```yaml
+states:
+  TX:
+    name: Texas
+    preferred_cities: [Houston, Dallas, San Antonio, Austin, El Paso]
+    rural_preferred: true
+    search_enabled: true
+  NM:
+    name: New Mexico
+    preferred_cities: [Albuquerque, Santa Fe, Las Cruces]
+    rural_preferred: true
+    search_enabled: true
+  AZ:
+    name: Arizona
+    preferred_cities: [Phoenix, Tucson, Scottsdale]
+    rural_preferred: false
+    search_enabled: true
+  OK:
+    name: Oklahoma
+    preferred_cities: [Oklahoma City, Tulsa]
+    rural_preferred: true
+    search_enabled: true
+  LA:
+    name: Louisiana
+    preferred_cities: [New Orleans, Baton Rouge, Shreveport]
+    rural_preferred: false
+    search_enabled: true
+```
+
+### config/search_terms.yaml
+```yaml
+specialty_terms:
+  - Internal Medicine Physician
+  - Hospitalist
+  - Nocturnist
+  - Primary Care Physician
+  - Outpatient Internal Medicine
+  - Academic Internal Medicine
+  - Internal Medicine Faculty
+  - IM Hospitalist
+  - PCP Internal Medicine
+
+visa_terms:
+  h1b:
+    - H1B
+    - H-1B
+    - H1-B
+    - H-1B sponsorship
+  j1:
+    - J1
+    - J-1
+    - J1 waiver
+    - J-1 waiver
+    - Conrad 30
+  possible:
+    - visa sponsorship
+    - immigration assistance
+    - sponsorship available
+  no:
+    - no visa sponsorship
+    - unable to sponsor
+    - must be authorized to work without sponsorship
+
+candidate:
+  candidate_name: "[Candidate Name]"
+  sender_name: "[Your Name]"
+  sender_email: "[Your Email]"
+  preferred_states: [TX, NM, AZ]
+```
+
+### config/sources.yaml
+Contains:
+- Per-source enable/disable flags and scrape method (`httpx` | `playwright` | `csv_only`)
+- Pre-curated employer career URLs for TX/NM/AZ/OK/LA
+  (HCA Healthcare, Baylor Scott & White, UNM Health, Banner Health, OU Health, LCMC Health,
+   University Health SA, Christus Health, Presbyterian Healthcare, University of TX systems,
+   VA hospital career portals, FQHC networks)
+- Manual employer URL additions
+
+---
+
+## 5. Database Schema (SQLAlchemy ORM, SQLite)
+
+### jobs
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| source_name | TEXT | |
+| source_type | TEXT | job_board \| hospital \| academic \| fqhc \| va |
+| source_url | TEXT | original listing URL (always stored) |
+| apply_url | TEXT | direct apply link if different |
+| title | TEXT | |
+| employer | TEXT | |
+| employer_type | TEXT | direct \| recruiter |
+| city | TEXT | |
+| state | TEXT | |
+| specialty | TEXT | matched specialty term |
+| job_type | TEXT | full_time \| part_time \| locum \| unknown |
+| salary_text | TEXT | raw extracted salary snippet |
+| salary_min | INTEGER | annualized |
+| salary_max | INTEGER | annualized |
+| visa_text | TEXT | raw extracted visa snippet |
+| h1b_status | TEXT | confirmed \| possible \| no \| unknown |
+| j1_status | TEXT | confirmed \| possible \| no \| unknown |
+| waiver_status | TEXT | likely \| unknown |
+| contact_email | TEXT | only if publicly listed in posting |
+| contact_phone | TEXT | only if publicly listed in posting |
+| short_summary | TEXT | ≤500 chars, no full description copy |
+| full_text_hash | TEXT | SHA256(title+employer+city+state) |
+| first_seen_at | DATETIME UTC | |
+| last_seen_at | DATETIME UTC | |
+| status | TEXT | new \| reviewed \| applied \| rejected \| expired |
+| duplicate_group_id | TEXT | UUID linking near-duplicates |
+| priority_score | REAL | 0.0–100.0 |
+| priority_label | TEXT | HIGH \| MEDIUM \| LOW |
+| manual_review_required | BOOLEAN | set if extraction uncertain |
+| created_at | DATETIME UTC | |
+| updated_at | DATETIME UTC | |
+
+### employers
+| Column | Type |
+|---|---|
+| id | INTEGER PK |
+| employer_name | TEXT |
+| website | TEXT |
+| careers_url | TEXT |
+| city | TEXT |
+| state | TEXT |
+| employer_type | TEXT |
+| notes | TEXT |
+
+### scrape_runs
+| Column | Type |
+|---|---|
+| id | INTEGER PK |
+| selected_states | TEXT (JSON) |
+| selected_terms | TEXT (JSON) |
+| source_name | TEXT |
+| started_at | DATETIME UTC |
+| finished_at | DATETIME UTC |
+| jobs_found | INTEGER |
+| new_jobs | INTEGER |
+| duplicates_found | INTEGER |
+| errors | TEXT |
+| status | TEXT |
+
+### gmail_drafts
+| Column | Type |
+|---|---|
+| id | INTEGER PK |
+| job_id | INTEGER FK |
+| recipient_email | TEXT |
+| subject | TEXT |
+| draft_body | TEXT |
+| gmail_draft_id | TEXT |
+| created_at | DATETIME UTC |
+| status | TEXT |
+
+### manual_reviews
+| Column | Type |
+|---|---|
+| id | INTEGER PK |
+| job_id | INTEGER FK |
+| reason | TEXT |
+| reviewed | BOOLEAN |
+| notes | TEXT |
+| created_at | DATETIME UTC |
+
+---
+
+## 6. Scraper Design
+
+### BaseScraper ABC (src/scrapers/base.py)
+```python
+class BaseScraper(ABC):
+    source_name: str
+    source_type: str
+    scrape_method: str  # "httpx" | "playwright" | "csv_only"
+    enabled: bool
+
+    @abstractmethod
+    def fetch(self, state: str, terms: list[str]) -> list[RawJob]: ...
+
+    def is_blocked(self, response) -> bool:
+        # Checks for CAPTCHA, Cloudflare challenge, login redirect
+        ...
+
+    def check_robots(self, url: str) -> bool:
+        # Returns True if scraping allowed
+        ...
+```
+
+### Source Coverage
+
+| Source | Method | Fallback |
+|---|---|---|
+| DocCafe | HTTPX + BS4 | skip + log |
+| NEJM CareerCenter | HTTPX + BS4 | skip + log |
+| Health eCareers | HTTPX + BS4 | skip + log |
+| JAMA Career Center | HTTPX + BS4 | skip + log |
+| HospitalRecruiting.com | HTTPX + BS4 | skip + log |
+| MDJobSite | HTTPX + BS4 | skip + log |
+| PracticeLink | Playwright | CSV importer |
+| PracticeMatch | Placeholder | CSV importer |
+| LinkedIn/Indeed/ZipRecruiter | CSV importer only | — |
+| Hospital career pages | generic_hospital.py | mark needs_manual_review |
+
+### Generic Hospital Scraper
+Handles:
+- Career pages with job card lists
+- Search pages with `?q=` or `?keyword=` params
+- Location filter params
+- Pagination (public pages only)
+- Extracts: title, location, apply link, employer
+- On failure: logs, marks `manual_review_required=True`, continues
+
+---
+
+## 7. State-Based Discovery
+
+`state_search.py` generates search queries per state+term combination:
+```
+"Internal Medicine Physician jobs Texas hospital careers"
+"Hospitalist jobs Texas health system careers"
+"J1 waiver internal medicine physician Texas"
+"H1B internal medicine physician Texas hospital"
+"Internal Medicine faculty jobs Texas university"
+"Nocturnist Internal Medicine Texas hospital"
+```
+
+`source_discovery.py`:
+1. Runs queries via `duckduckgo-search` Python package (free, no API key)
+2. Filters results: checks `robots.txt` for each new domain
+3. Skips domains already in `employers` table
+4. Saves new employer career URLs to `employers` table
+5. Passes to `generic_hospital.py` for scraping
+
+---
+
+## 8. Deduplication (src/dedupe.py)
+
+Two-pass:
+
+**Pass 1 — Exact hash**
+- Hash = SHA256(`title.lower() + employer.lower() + city.lower() + state`)
+- O(1) lookup against `full_text_hash` in DB
+- Exact match → skip insert, update `last_seen_at`
+
+**Pass 2 — Fuzzy**
+- RapidFuzz `token_sort_ratio` on `(title + " " + employer)`
+- Threshold: 88
+- Match → assign same `duplicate_group_id` (UUID)
+- Only earliest-seen job in group shown by default in UI/exports
+
+---
+
+## 9. Visa Classification (src/visa_classifier.py)
+
+Strict regex on extracted `visa_text` snippet (≤300 chars pulled from posting):
+
+```python
+H1B_CONFIRMED  = r'\bH[-\s]?1[-\s]?B\b'
+J1_CONFIRMED   = r'\bJ[-\s]?1\b|\bConrad\s*30\b'
+VISA_POSSIBLE  = r'visa sponsorship|immigration assistance|sponsorship available'
+VISA_NO        = r'no visa sponsorship|unable to sponsor|must be authorized to work without sponsorship'
+```
+
+Rules (applied in order):
+1. If H1B pattern → `h1b_status = confirmed`
+2. If J1/Conrad pattern → `j1_status = confirmed`; if Conrad 30 → `waiver_status = likely`
+3. If possible pattern (no specific type) → `h1b_status = possible`, `j1_status = possible`
+4. If no pattern → `h1b_status = no`, `j1_status = no`
+5. If no visa text found → all `unknown`
+
+Never assume sponsorship. No inference beyond the text.
+
+---
+
+## 10. Salary Parser (src/salary_parser.py)
+
+Regex patterns:
+```python
+r'\$(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:–|-|to)\s*\$(\d{1,3}(?:,\d{3})*)'  # range
+r'\$(\d{1,3}(?:,\d{3})+)'   # single value
+r'\$(\d{2,3})[kK]\b'        # shorthand (180k → 180,000)
+r'up to \$(\d{1,3}(?:,\d{3})*)'  # up to X
+```
+
+Outputs:
+- `salary_text`: raw matched snippet
+- `salary_min`: integer (annualized)
+- `salary_max`: integer (annualized, or same as min if single value)
+
+---
+
+## 11. Ranker (src/ranker.py)
+
+Score 0–100, assigned at upsert time and recalculated on each scrape:
+
+| Signal | Points |
+|---|---|
+| Salary posted | +15 |
+| H1B confirmed | +20 |
+| J1 confirmed | +15 |
+| Direct employer (not recruiter) | +10 |
+| In preferred state (TX/NM/AZ) | +10 |
+| Academic / university employer | +8 |
+| FQHC / rural / underserved | +8 |
+| VA hospital | +5 |
+| Title matches Hospitalist or Nocturnist | +5 |
+| First seen today | +4 |
+
+`priority_label`:
+- HIGH: score ≥ 60
+- MEDIUM: score 30–59
+- LOW: score < 30
+
+---
+
+## 12. Exports (src/exporters.py)
+
+Output dir: `data/exports/YYYY-MM-DD/`
+
+| File | Contents |
+|---|---|
+| `jobs_all.csv` | Full deduped job list, all columns |
+| `jobs_high_priority.csv` | HIGH priority only |
+| `daily_summary.txt` | Jinja2 rendered from `templates/daily_summary.txt` |
+| `scrape_report.txt` | Per-source: found / new / dupes / errors / blocked |
+
+---
+
+## 13. Gmail Drafts (src/gmail_drafts.py)
+
+- Gmail API v1, OAuth2 flow
+- `credentials.json` from Google Cloud Console (stored in `.env` path)
+- `token.json` cached after first auth
+- Draft created per selected job using Jinja2 `templates/job_email_draft.txt`
+- Draft ID stored in `gmail_drafts` table
+- Triggered manually from Streamlit "Browse Jobs" tab
+- Never auto-sent
+
+---
+
+## 14. Streamlit Dashboard (src/dashboard.py)
+
+Four tabs:
+
+**Tab 1 — Run Pipeline**
+- Multi-select: states (TX/NM/AZ/OK/LA)
+- Multi-select: specialty terms
+- "Run Now" button → calls `main.run_pipeline(states, terms)`
+- Live log output in text area
+
+**Tab 2 — Browse Jobs**
+- Filterable dataframe: state, visa status (H1B/J1), priority label, employer type, status
+- Click row → detail panel: title, employer, city, salary, visa, summary, source URL
+- "Create Gmail Draft" button per job
+- "Mark Reviewed / Applied / Rejected" status buttons
+
+**Tab 3 — Exports**
+- List past export run directories
+- Download buttons for CSV files
+- Show daily summary text
+
+**Tab 4 — Sources**
+- Table of all sources with last run stats (found/new/dupes/errors)
+- Toggle enable/disable per source
+- "Add employer URL" form → saves to `employers` table + `sources.yaml`
+- Manual CSV import upload for gated sources
+
+---
+
+## 15. Error Handling
+
+- Every scraper wrapped in `try/except`; failure logged to `data/logs/YYYY-MM-DD.log` and `scrape_runs` table; pipeline continues
+- `robots.txt` checked via `urllib.robotparser` before every new domain; disallowed → skip + log
+- Playwright: detect Cloudflare/CAPTCHA by checking for known challenge page text patterns; if detected → mark source `blocked_auto`, skip, log
+- All blocked/errored sources surfaced in Streamlit Sources tab
+- Manual CSV import path available for any source that proves unreliable
+
+---
+
+## 16. Tech Stack
+
+| Component | Library |
+|---|---|
+| HTTP (static) | `httpx` |
+| HTML parsing | `beautifulsoup4` + `lxml` |
+| Dynamic pages | `playwright` |
+| Database ORM | `sqlalchemy` |
+| Database | SQLite |
+| Deduplication | `rapidfuzz` |
+| Data models | `pydantic` |
+| Data processing | `pandas` |
+| Config | `pyyaml` |
+| Secrets | `python-dotenv` |
+| Web search | `duckduckgo-search` |
+| Email | Gmail API v1 (`google-api-python-client`) |
+| Templates | `jinja2` |
+| Dashboard | `streamlit` |
+| Regex | stdlib `re` |
+| Hashing | stdlib `hashlib` |
+| robots.txt | stdlib `urllib.robotparser` |
+
+Python 3.11+. All dependencies pinned in `requirements.txt`.
+
+---
+
+## 17. Environment Variables (.env)
+
+```
+GMAIL_CREDENTIALS_PATH=config/credentials.json
+GMAIL_TOKEN_PATH=config/token.json
+GMAIL_SENDER_EMAIL=your@gmail.com
+DB_PATH=data/jobs.db
+LOG_DIR=data/logs
+EXPORT_DIR=data/exports
+```
+
+---
+
+## 18. Out of Scope (MVP)
+
+- Cloud hosting / remote access
+- Multi-user support
+- Email auto-sending
+- Paid search APIs (SerpAPI, etc.)
+- Async/parallel scraping
+- Docker container
+- Automated scheduling (Windows Task Scheduler setup is documented in README but not automated)

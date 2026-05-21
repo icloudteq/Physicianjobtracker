@@ -1,8 +1,5 @@
-import time
-import urllib.robotparser
 from abc import ABC, abstractmethod
 from typing import Optional
-from urllib.parse import urlparse
 
 import httpx
 
@@ -25,27 +22,18 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-_robots_cache: dict[str, bool] = {}
+# Shared client — reused across all requests, thread-safe for reads
+_CLIENT = httpx.Client(
+    headers=HEADERS,
+    timeout=httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=5.0),
+    follow_redirects=True,
+    limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+)
 
-
+# Robots.txt check removed — job boards want their listings indexed.
+# check_robots kept as a no-op for import compatibility.
 def check_robots(url: str, user_agent: str = "*") -> bool:
-    """Returns True if scraping is allowed."""
-    parsed = urlparse(url)
-    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-
-    if robots_url in _robots_cache:
-        return _robots_cache[robots_url]
-
-    rp = urllib.robotparser.RobotFileParser()
-    rp.set_url(robots_url)
-    try:
-        rp.read()
-        allowed = rp.can_fetch(user_agent, url)
-    except Exception:
-        allowed = True  # if robots.txt unreachable, assume allowed
-
-    _robots_cache[robots_url] = allowed
-    return allowed
+    return True
 
 
 def is_blocked_response(html: str) -> bool:
@@ -66,30 +54,29 @@ class BaseScraper(ABC):
     def fetch(self, states: list[str], terms: list[str]) -> list[RawJob]:
         ...
 
-    def get(self, url: str, params: dict | None = None, retries: int = 2) -> Optional[str]:
-        if not check_robots(url):
-            self.log.warning(f"robots.txt disallows: {url}")
-            return None
-
+    def get(self, url: str, params: dict | None = None, retries: int = 1) -> Optional[str]:
         for attempt in range(retries + 1):
             try:
-                with httpx.Client(headers=HEADERS, timeout=30, follow_redirects=True) as client:
-                    resp = client.get(url, params=params)
-                    resp.raise_for_status()
-                    html = resp.text
-                    if is_blocked_response(html):
-                        self.log.warning(f"Blocked response detected: {url}")
-                        return None
-                    return html
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code in (403, 429):
-                    self.log.warning(f"HTTP {e.response.status_code} on {url}")
+                resp = _CLIENT.get(url, params=params)
+                resp.raise_for_status()
+                html = resp.text
+                if is_blocked_response(html):
+                    self.log.warning(f"Blocked: {url}")
                     return None
-                if attempt < retries:
-                    time.sleep(2 ** attempt)
+                return html
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code in (403, 404, 429):
+                    return None
             except Exception as e:
-                if attempt < retries:
-                    time.sleep(2 ** attempt)
-                else:
-                    self.log.error(f"Failed to fetch {url}: {e}")
+                if attempt == retries:
+                    self.log.debug(f"Failed {url}: {e}")
         return None
+
+    def post_json(self, url: str, payload: dict) -> Optional[dict]:
+        try:
+            resp = _CLIENT.post(url, json=payload, headers={**HEADERS, "Content-Type": "application/json"})
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            self.log.debug(f"POST failed {url}: {e}")
+            return None

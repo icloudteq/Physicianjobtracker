@@ -4,7 +4,6 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-data/jobs.db
 data/logs/
 data/exports/
 data/dol_lca/
@@ -13,3 +12,6 @@ config/token.json
 *.egg-info/
 dist/
 build/
+test_*.py
+final_check.py
+check_*.py

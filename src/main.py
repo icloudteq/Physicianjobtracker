@@ -4,6 +4,8 @@ Usage: python -m src.main --states NC SC --run
 """
 import argparse
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Callable
 
@@ -26,17 +28,27 @@ log = get_logger("main")
 
 # Scrapers registry
 def _get_scrapers():
-    from src.scrapers.csv_importer import import_all_from_dir
     from src.scrapers.doccafe import DocCafeScraper
-    from src.scrapers.generic_hospital import GenericHospitalScraper
     from src.scrapers.health_ecareers import HealthECareersScraper
     from src.scrapers.hospital_recruiting import HospitalRecruitingScraper
+    from src.scrapers.icims import IcimsScraper
+    from src.scrapers.jama import JAMACareerScraper
     from src.scrapers.nejm import NEJMScraper
+    from src.scrapers.practicematch import PracticeMatchScraper
+    from src.scrapers.practicelink import PracticeLinkScraper
+    from src.scrapers.taleo import TaleoScraper
+    from src.scrapers.workday import WorkdayScraper
     return [
         DocCafeScraper(),
         NEJMScraper(),
+        JAMACareerScraper(),
         HealthECareersScraper(),
         HospitalRecruitingScraper(),
+        WorkdayScraper(),
+        IcimsScraper(),
+        TaleoScraper(),
+        PracticeMatchScraper(),
+        PracticeLinkScraper(),
     ]
 
 
@@ -66,6 +78,11 @@ def _enrich(raw: RawJob, session) -> dict:
     contact_data = extract_contact(text)
     posted_date = parse_posted_date(raw.posted_date_raw or text)
     dol_data = lookup_salary(raw.employer, raw.state or "", session)
+
+    # DOL LCA match = employer has filed H1B petitions = treat as H1B possible
+    if dol_data.get("dol_salary_min") and visa_data.get("h1b_status") == "unknown":
+        visa_data["h1b_status"] = "possible"
+        visa_data["visa_text"] = f"DOL LCA data: {dol_data.get('dol_case_count', 'N/A')} H1B filings ({dol_data.get('dol_salary_year', '')})"
 
     enriched = {
         "salary_min": salary_min,
@@ -108,16 +125,13 @@ def run_pipeline(
     ensure_lca_loaded()
 
     session = get_session()
+    db_lock = threading.Lock()
     scrapers = _get_scrapers()
     total_new = 0
     total_high = 0
     run_results = []
 
-    # Run job board scrapers
-    for scraper in scrapers:
-        if not scraper.enabled:
-            continue
-        log_progress(f"Scraping {scraper.source_name}...")
+    def _run_one_scraper(scraper) -> ScrapeRunResult:
         result = ScrapeRunResult(
             source_name=scraper.source_name,
             started_at=datetime.utcnow(),
@@ -125,18 +139,19 @@ def run_pipeline(
             selected_terms=terms,
         )
         try:
+            log_progress(f"Scraping {scraper.source_name}...")
             raw_jobs = scraper.fetch(states, terms)
             result.jobs_found = len(raw_jobs)
             new_count = 0
-            for raw in raw_jobs:
-                enriched = _enrich(raw, session)
-                _, is_new = upsert_job(session, raw, enriched)
-                if is_new:
-                    new_count += 1
-                    if enriched.get("priority_label") == "HIGH":
-                        total_high += 1
+            with db_lock:
+                for raw in raw_jobs:
+                    enriched = _enrich(raw, session)
+                    _, is_new = upsert_job(session, raw, enriched)
+                    if is_new:
+                        new_count += 1
+                        if enriched.get("priority_label") == "HIGH":
+                            result.jobs_found  # counted below
             result.new_jobs = new_count
-            total_new += new_count
             log_progress(f"  {scraper.source_name}: {len(raw_jobs)} found, {new_count} new")
         except Exception as e:
             result.errors = str(e)
@@ -145,41 +160,65 @@ def run_pipeline(
         finally:
             result.finished_at = datetime.utcnow()
             result.status = result.status or "completed"
-            run_record = ScrapeRun(
-                source_name=result.source_name,
-                selected_states=json.dumps(result.selected_states),
-                selected_terms=json.dumps(result.selected_terms),
-                started_at=result.started_at,
-                finished_at=result.finished_at,
-                jobs_found=result.jobs_found,
-                new_jobs=result.new_jobs,
-                errors=result.errors,
-                status=result.status,
-            )
-            session.add(run_record)
-            session.commit()
-            run_results.append(result)
+        return result
 
-    # Scrape pre-curated hospital career pages
+    # Run all scrapers in parallel
+    active = [s for s in scrapers if s.enabled]
+    log_progress(f"Running {len(active)} scrapers in parallel…")
+    with ThreadPoolExecutor(max_workers=len(active)) as pool:
+        futures = {pool.submit(_run_one_scraper, s): s for s in active}
+        for future in as_completed(futures):
+            result = future.result()
+            total_new += result.new_jobs
+            # count HIGH from DB after all inserts
+            run_results.append(result)
+            with db_lock:
+                run_record = ScrapeRun(
+                    source_name=result.source_name,
+                    selected_states=json.dumps(result.selected_states),
+                    selected_terms=json.dumps(result.selected_terms),
+                    started_at=result.started_at,
+                    finished_at=result.finished_at,
+                    jobs_found=result.jobs_found,
+                    new_jobs=result.new_jobs,
+                    errors=result.errors,
+                    status=result.status,
+                )
+                session.add(run_record)
+                session.commit()
+
+    # Count HIGH priority after all scrapers done
+    from src.db import Job
+    total_high = session.query(Job).filter_by(priority_label="HIGH").count()
+
+    # Scrape pre-curated hospital career pages — also in parallel
     from src.scrapers.generic_hospital import GenericHospitalScraper
     hosp_scraper = GenericHospitalScraper()
     employers = session.query(Employer).all()
-    for emp in employers:
-        if not emp.careers_url:
-            continue
-        emp_state = emp.state if emp.state != "ALL" else states[0]
-        log_progress(f"Scraping {emp.employer_name}...")
+    active_employers = [e for e in employers if e.careers_url]
+
+    def _scrape_employer(emp) -> int:
+        emp_state = emp.state if emp.state != "ALL" else (states[0] if states else "NC")
         try:
             raw_jobs = hosp_scraper.scrape_employer(emp.employer_name, emp.careers_url, emp_state, terms)
-            for raw in raw_jobs:
-                enriched = _enrich(raw, session)
-                _, is_new = upsert_job(session, raw, enriched)
-                if is_new:
-                    total_new += 1
-                    if enriched.get("priority_label") == "HIGH":
-                        total_high += 1
+            new_count = 0
+            with db_lock:
+                for raw in raw_jobs:
+                    enriched = _enrich(raw, session)
+                    _, is_new = upsert_job(session, raw, enriched)
+                    if is_new:
+                        new_count += 1
+            return new_count
         except Exception as e:
             log.error(f"Hospital scrape failed for {emp.employer_name}: {e}")
+            return 0
+
+    if active_employers:
+        log_progress(f"Scraping {len(active_employers)} hospital career pages in parallel…")
+        with ThreadPoolExecutor(max_workers=min(len(active_employers), 16)) as pool:
+            emp_futures = [pool.submit(_scrape_employer, emp) for emp in active_employers]
+            for f in as_completed(emp_futures):
+                total_new += f.result()
 
     # CSV manual imports
     from src.scrapers.csv_importer import import_all_from_dir
@@ -190,11 +229,28 @@ def run_pipeline(
         if is_new:
             total_new += 1
 
+    # Detail-enrich NC/SC jobs: fetch individual pages for H1B/salary/contact
+    from src.detail_enricher import enrich_job_details
+    nc_sc_states = [s for s in states if s.upper() in ("NC", "SC")]
+    if nc_sc_states:
+        log_progress("Detail-enriching NC/SC jobs for H1B/salary/contact…")
+        detail_result = enrich_job_details(states=nc_sc_states, limit=150)
+        log_progress(
+            f"  Detail enrichment: {detail_result['enriched']} updated "
+            f"(H1B={detail_result['h1b_found']}, salary={detail_result['salary_found']}, "
+            f"contact={detail_result['contact_found']})"
+        )
+
     # Export
     export_path = export_run(session)
     log_progress(f"Exported to {export_path}")
 
     session.close()
+
+    # Refresh HIGH count after detail enrichment
+    session2 = get_session()
+    total_high = session2.query(Job).filter_by(priority_label="HIGH").count()
+    session2.close()
 
     notify(total_new, total_high)
     log_progress(f"Pipeline complete. {total_new} new jobs ({total_high} HIGH priority)")

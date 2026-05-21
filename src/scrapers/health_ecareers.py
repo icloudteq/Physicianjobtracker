@@ -1,4 +1,4 @@
-from bs4 import BeautifulSoup
+﻿from bs4 import BeautifulSoup
 
 from src.models import RawJob
 from src.scrapers.base import BaseScraper
@@ -20,7 +20,7 @@ class HealthECareersScraper(BaseScraper):
         return jobs
 
     def _parse(self, html: str, state: str, term: str) -> list[RawJob]:
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         jobs = []
 
         for card in soup.select(".job-listing, .search-result, [class*='job-card'], [class*='result-item']"):
@@ -57,3 +57,4 @@ class HealthECareersScraper(BaseScraper):
                 short_summary=raw_text[:400],
             ))
         return jobs
+

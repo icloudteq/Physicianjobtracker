@@ -1,6 +1,7 @@
 from src.models import RawJob
 
 PREFERRED_STATES = {"NC", "SC"}
+NEARBY_STATES = {"VA", "GA", "TN"}  # neighboring — partial credit
 
 _ACADEMIC_KEYWORDS = {"university", "academic", "medical school", "college", "faculty"}
 _FQHC_KEYWORDS = {"fqhc", "community health", "rural health", "federally qualified"}
@@ -12,25 +13,33 @@ _RECRUITER_KEYWORDS = {"staffing", "recruiting", "search group", "placement"}
 def score_job(raw: RawJob, enriched: dict) -> tuple[float, str]:
     score = 0.0
 
-    # NC/SC preferred states — highest signal
-    if (raw.state or "").upper() in PREFERRED_STATES:
+    state_upper = (raw.state or "").upper()
+    if state_upper in PREFERRED_STATES:
         score += 20
+    elif state_upper in NEARBY_STATES:
+        score += 8
 
     # Salary posted
     if enriched.get("salary_min") or enriched.get("salary_max"):
         score += 15
 
-    # H1B confirmed
+    # H1B confirmed in job text
     if enriched.get("h1b_status") == "confirmed":
         score += 20
     elif enriched.get("h1b_status") == "possible":
-        score += 5
+        # DOL LCA match is strong evidence; generic "possible" from text is weaker
+        dol_match = enriched.get("dol_salary_min") is not None
+        score += 12 if dol_match else 5
 
     # J1 confirmed
     if enriched.get("j1_status") == "confirmed":
         score += 15
     elif enriched.get("j1_status") == "possible":
         score += 4
+
+    # DOL salary data available (employer has H1B filings = salary transparency)
+    if enriched.get("dol_salary_min") and not (enriched.get("salary_min")):
+        score += 5  # bonus for DOL salary data when posted salary missing
 
     # Direct employer (not recruiter)
     employer_lower = raw.employer.lower()
@@ -58,5 +67,5 @@ def score_job(raw: RawJob, enriched: dict) -> tuple[float, str]:
     if enriched.get("contact_email") or enriched.get("contact_name"):
         score += 10
 
-    label = "HIGH" if score >= 60 else ("MEDIUM" if score >= 30 else "LOW")
+    label = "HIGH" if score >= 40 else ("MEDIUM" if score >= 20 else "LOW")
     return score, label

@@ -25,7 +25,8 @@ def classify_visa(text: str) -> dict:
         return {"h1b_status": "unknown", "j1_status": "unknown",
                 "waiver_status": "unknown", "visa_text": None}
 
-    snippet = text[:500]
+    # Use full text for detail pages (up to 8k), short for listing cards
+    snippet = text[:8000]
 
     h1b = "unknown"
     j1 = "unknown"
@@ -45,9 +46,20 @@ def classify_visa(text: str) -> dict:
             h1b = "possible"
             j1 = "possible"
 
+    # Extract the sentence containing visa info for display
+    visa_text = None
+    if h1b != "unknown" or j1 != "unknown":
+        for pattern in (_H1B, _J1, _CONRAD, _POSSIBLE, _NO):
+            m = pattern.search(snippet)
+            if m:
+                start = max(0, m.start() - 80)
+                end = min(len(snippet), m.end() + 120)
+                visa_text = snippet[start:end].strip()
+                break
+
     return {
         "h1b_status": h1b,
         "j1_status": j1,
         "waiver_status": waiver,
-        "visa_text": snippet[:300] if (h1b != "unknown" or j1 != "unknown") else None,
+        "visa_text": visa_text,
     }

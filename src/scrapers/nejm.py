@@ -1,68 +1,72 @@
-from bs4 import BeautifulSoup
-
+﻿from bs4 import BeautifulSoup
 from src.models import RawJob
 from src.scrapers.base import BaseScraper
 
 _STATE_NAMES = {
     "NC": "North Carolina", "SC": "South Carolina", "TX": "Texas",
-    "CA": "California", "NY": "New York", "FL": "Florida",
-    "GA": "Georgia", "VA": "Virginia", "OH": "Ohio",
+    "NM": "New Mexico", "AZ": "Arizona", "OK": "Oklahoma", "LA": "Louisiana",
+    "CA": "California", "NY": "New York", "FL": "Florida", "GA": "Georgia",
+    "VA": "Virginia", "OH": "Ohio", "TN": "Tennessee", "PA": "Pennsylvania",
+    "MD": "Maryland", "AL": "Alabama", "MS": "Mississippi",
 }
+
+_PHYSICIAN_KEYWORDS = [
+    "physician", "hospitalist", "nocturnist", "internal medicine",
+    "family medicine", "primary care", "internist", "md ", "m.d.",
+]
+
+_BASE = "https://www.nejmcareercenter.org"
 
 
 class NEJMScraper(BaseScraper):
     source_name = "nejm"
     source_type = "job_board"
-    BASE = "https://careers.nejm.org"
 
     def fetch(self, states: list[str], terms: list[str]) -> list[RawJob]:
         jobs = []
-        for term in terms[:3]:  # limit queries to avoid rate limiting
-            for state in states:
-                url = f"{self.BASE}/jobs/"
-                html = self.get(url, params={"keywords": term, "location": state})
-                if html:
-                    jobs.extend(self._parse(html, state, term))
+        seen = set()
+        search_terms = ["physician", "hospitalist", "internal medicine"]
+        for state in states:
+            state_name = _STATE_NAMES.get(state.upper(), state)
+            for term in search_terms:
+                html = self.get(f"{_BASE}/jobs/", params={"keywords": term, "location": state_name})
+                if not html:
+                    continue
+                soup = BeautifulSoup(html, "html.parser")
+                # Primary selector â€” YM Careers platform
+                cards = soup.select("li[class*='job']")
+                for card in cards:
+                    link_el = card.select_one("a[href]")
+                    if not link_el:
+                        continue
+                    href = link_el.get("href", "")
+                    if href in seen:
+                        continue
+                    title_el = card.select_one("h2, h3, .lJobItemTitle, [class*='title'], a")
+                    title = (title_el or link_el).get_text(strip=True)
+                    if not title or len(title) < 6:
+                        continue
+                    if not any(kw in title.lower() for kw in _PHYSICIAN_KEYWORDS):
+                        continue
+                    seen.add(href)
+                    apply_url = href if href.startswith("http") else f"{_BASE}{href}"
+                    employer_el = card.select_one(".employer, .organization, [class*='employer'], [class*='company']")
+                    location_el = card.select_one(".location, [class*='location'], [class*='city']")
+                    employer = employer_el.get_text(strip=True) if employer_el else "Unknown"
+                    location = location_el.get_text(strip=True) if location_el else ""
+                    city = location.split(",")[0].strip() if "," in location else ""
+                    raw_text = card.get_text(" ", strip=True)
+                    jobs.append(RawJob(
+                        source_name=self.source_name,
+                        source_type=self.source_type,
+                        source_url=apply_url,
+                        title=title,
+                        employer=employer,
+                        city=city,
+                        state=state.upper(),
+                        specialty="Internal Medicine",
+                        raw_text=raw_text,
+                        short_summary=raw_text[:400],
+                    ))
         return jobs
 
-    def _parse(self, html: str, state: str, term: str) -> list[RawJob]:
-        soup = BeautifulSoup(html, "lxml")
-        jobs = []
-
-        for card in soup.select(".job-result, .vacancy, article, [class*='job']"):
-            title_el = card.select_one("h2, h3, .job-title, a")
-            employer_el = card.select_one(".employer, .organization, [class*='employer']")
-            location_el = card.select_one(".location, [class*='location']")
-            link_el = card.select_one("a[href]")
-
-            if not title_el:
-                continue
-
-            title = title_el.get_text(strip=True)
-            if not any(kw in title.lower() for kw in ["medicine", "hospitalist", "physician", "nocturnist", "family"]):
-                continue
-
-            employer = employer_el.get_text(strip=True) if employer_el else "Unknown"
-            location = location_el.get_text(strip=True) if location_el else ""
-            city = location.split(",")[0].strip() if "," in location else ""
-
-            href = ""
-            if link_el:
-                href = link_el.get("href", "")
-                if href.startswith("/"):
-                    href = f"{self.BASE}{href}"
-
-            raw_text = card.get_text(" ", strip=True)
-            jobs.append(RawJob(
-                source_name=self.source_name,
-                source_type=self.source_type,
-                source_url=href or f"{self.BASE}/jobs/",
-                title=title,
-                employer=employer,
-                city=city,
-                state=state.upper(),
-                specialty=term,
-                raw_text=raw_text,
-                short_summary=raw_text[:400],
-            ))
-        return jobs

@@ -44,6 +44,26 @@ def upsert_job(session: Session, raw: RawJob, enriched: dict) -> tuple[Job, bool
     """
     text_hash = make_hash(raw.title, raw.employer, raw.city or "", raw.state or "")
 
+    # URL-based match first — catches re-scraped jobs with updated employer/city
+    if raw.source_url:
+        url_existing = session.query(Job).filter_by(source_url=raw.source_url).first()
+        if url_existing:
+            url_existing.last_seen_at = datetime.utcnow()
+            url_existing.updated_at = datetime.utcnow()
+            # Update employer/city if we now have real data
+            if raw.employer and raw.employer != "Unknown":
+                url_existing.employer = raw.employer
+                url_existing.full_text_hash = text_hash
+            if raw.city:
+                url_existing.city = raw.city
+            if raw.posted_date_raw:
+                url_existing.posted_date_raw = raw.posted_date_raw
+            for k, v in enriched.items():
+                if v is not None:
+                    setattr(url_existing, k, v)
+            session.commit()
+            return url_existing, False
+
     existing = session.query(Job).filter_by(full_text_hash=text_hash).first()
     if existing:
         existing.last_seen_at = datetime.utcnow()

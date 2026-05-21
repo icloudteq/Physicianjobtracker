@@ -2,7 +2,9 @@
 Physician Job Tracker — Streamlit App
 Run with: streamlit run src/dashboard.py
 """
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime
 from pathlib import Path
 
@@ -21,13 +23,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Auto-refresh every 60s
+# Auto-refresh UI every 60s so new jobs appear without manual reload
 st_autorefresh(interval=60_000, key="auto_refresh")
+
+# Auto-start background scheduler (runs pipeline every 2h silently)
+if not is_running():
+    start_scheduler()
 
 
 @st.cache_data(ttl=60)
 def load_jobs(status_filter=None, state_filter=None, visa_filter=None,
-              priority_filter=None, specialty_filter=None,
+              priority_filter=None, specialty_filter=None, job_type_filter=None,
               salary_min=None, date_from=None):
     session = get_session()
     q = session.query(Job)
@@ -37,6 +43,8 @@ def load_jobs(status_filter=None, state_filter=None, visa_filter=None,
         q = q.filter(Job.state.in_(state_filter))
     if visa_filter == "H1B Confirmed":
         q = q.filter(Job.h1b_status == "confirmed")
+    elif visa_filter == "H1B Possible":
+        q = q.filter(Job.h1b_status == "possible")
     elif visa_filter == "J1 Confirmed":
         q = q.filter(Job.j1_status == "confirmed")
     elif visa_filter == "Any Visa":
@@ -47,6 +55,20 @@ def load_jobs(status_filter=None, state_filter=None, visa_filter=None,
         q = q.filter(Job.specialty.ilike("%internal medicine%") | Job.specialty.ilike("%hospitalist%") | Job.specialty.ilike("%nocturnist%"))
     elif specialty_filter == "Family Medicine":
         q = q.filter(Job.specialty.ilike("%family%"))
+    # Job type filter
+    if job_type_filter == "Permanent":
+        q = q.filter(~Job.title.ilike("%locum%"), ~Job.title.ilike("%temp%"), ~Job.title.ilike("%contract%"))
+    elif job_type_filter == "Locums / Temp":
+        q = q.filter(Job.title.ilike("%locum%") | Job.title.ilike("%temp%") | Job.title.ilike("%contract%") | Job.short_summary.ilike("%locum%"))
+    elif job_type_filter == "Hospitalist":
+        q = q.filter(Job.title.ilike("%hospitalist%") | Job.specialty.ilike("%hospitalist%"))
+    elif job_type_filter == "Nocturnist":
+        q = q.filter(Job.title.ilike("%nocturnist%"))
+    elif job_type_filter == "Primary Care":
+        q = q.filter(
+            Job.title.ilike("%primary care%") | Job.title.ilike("%family medicine%") |
+            Job.title.ilike("%internal medicine%") | Job.title.ilike("%internist%")
+        )
     if salary_min:
         q = q.filter(Job.salary_min >= salary_min)
     if date_from:
@@ -78,33 +100,35 @@ def jobs_to_df(jobs: list) -> pd.DataFrame:
         elif j.salary_min:
             salary_display = f"${j.salary_min:,}+"
         elif j.salary_text:
-            salary_display = j.salary_text[:40]
+            salary_display = j.salary_text[:50]
 
         dol_salary = ""
         if j.dol_salary_min:
             dol_salary = f"${j.dol_salary_min:,}–${j.dol_salary_max:,} ({j.dol_salary_year})"
 
+        location = ", ".join(x for x in [j.city or "", j.state or ""] if x)
+
         rows.append({
             "ID": j.id,
-            "Title": j.title,
-            "Employer": j.employer,
-            "City": j.city or "",
-            "State": j.state or "",
-            "Specialty": j.specialty or "",
-            "Salary (Posted)": salary_display,
-            "DOL Historical $": dol_salary,
-            "Contact": j.contact_name or "",
-            "Email": j.contact_email or "",
-            "Phone": j.contact_phone or "",
+            "Priority": j.priority_label or "LOW",
             "H1B": j.h1b_status or "unknown",
             "J1": j.j1_status or "unknown",
-            "Posted": str(j.posted_date) if j.posted_date else "",
-            "Priority": j.priority_label or "LOW",
+            "Title": j.title,
+            "Employer": j.employer,
+            "Location": location,
+            "Specialty": j.specialty or "",
+            "Salary (Posted)": salary_display,
+            "DOL Salary": dol_salary,
+            "Email": j.contact_email or "",
+            "Phone": j.contact_phone or "",
+            "Contact": j.contact_name or "",
+            "Posted": str(j.posted_date) if j.posted_date else (
+                j.first_seen_at.strftime("%Y-%m-%d") if j.first_seen_at else ""
+            ),
             "Score": round(j.priority_score or 0, 1),
-            "Status": j.status or "new",
             "Source": j.source_name or "",
-            "URL": j.source_url or "",
-            "First Seen": j.first_seen_at.strftime("%Y-%m-%d") if j.first_seen_at else "",
+            "Apply": j.source_url or "",
+            "Status": j.status or "new",
         })
     return pd.DataFrame(rows)
 
@@ -134,7 +158,7 @@ with st.sidebar:
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(["▶ Run Pipeline", "🔍 Browse Jobs", "📥 Exports", "⚙ Sources"])
+tab2, tab1, tab3, tab4 = st.tabs(["🔍 Browse Jobs", "▶ Run Pipeline", "📥 Exports", "⚙ Sources"])
 
 
 # ── Tab 1: Run Pipeline ───────────────────────────────────────────────────────
@@ -164,26 +188,96 @@ with tab1:
             default=all_terms[:5],
         )
 
-    log_container = st.empty()
     run_btn = st.button("🚀 Run Now", type="primary", use_container_width=True)
 
     if run_btn:
-        log_lines = []
-        log_box = st.empty()
+        # Live status panel
+        s1, s2, s3 = st.columns(3)
+        metric_new   = s1.empty()
+        metric_src   = s2.empty()
+        metric_high  = s3.empty()
+        prog_bar     = st.progress(0, text="Starting…")
+        log_box      = st.empty()
+
+        metric_new.metric("New Jobs Found", 0)
+        metric_src.metric("Current Source", "—")
+        metric_high.metric("HIGH Priority", 0)
+
+        log_lines: list[str] = []
+        live_new   = [0]
+        live_high  = [0]
+        src_count  = [0]
+        _N_SCRAPERS = 14  # 10 board scrapers + ~4 hospital/csv phases
 
         def update_log(msg: str):
-            log_lines.append(msg)
-            log_box.text("\n".join(log_lines[-30:]))
+            ts = datetime.utcnow().strftime("%H:%M:%S")
 
-        with st.spinner("Running pipeline..."):
-            from src.main import run_pipeline
-            result = run_pipeline(
-                states=selected_states or None,
-                terms=selected_terms or None,
-                progress_cb=update_log,
-            )
+            if msg.startswith("Scraping "):
+                src_count[0] += 1
+                src = msg.removeprefix("Scraping ").removesuffix("…").removesuffix("...")
+                metric_src.metric("Current Source", src)
+                prog_bar.progress(
+                    min(src_count[0] / _N_SCRAPERS, 0.95),
+                    text=f"Scraping {src}…",
+                )
+                icon = "🔍"
+            elif " found, " in msg and " new" in msg:
+                try:
+                    new_n = int(msg.strip().split(",")[1].strip().split(" ")[0])
+                    live_new[0] += new_n
+                    metric_new.metric("New Jobs Found", live_new[0])
+                except (ValueError, IndexError):
+                    pass
+                icon = "✅"
+            elif "HIGH" in msg or "high" in msg:
+                icon = "⭐"
+            elif "Pipeline complete" in msg:
+                prog_bar.progress(1.0, text="Done")
+                icon = "🏁"
+            elif "error" in msg.lower() or "failed" in msg.lower():
+                icon = "❌"
+            else:
+                icon = "·"
 
-        st.success(f"✅ Done — {result['total_new']} new jobs found ({result['total_high']} HIGH priority)")
+            log_lines.append(f"{ts}  {icon}  {msg}")
+            log_box.code("\n".join(log_lines[-50:]), language=None)
+
+        from src.main import run_pipeline
+        result = run_pipeline(
+            states=selected_states or None,
+            terms=selected_terms or None,
+            progress_cb=update_log,
+        )
+
+        metric_new.metric("New Jobs Found", result["total_new"])
+        metric_high.metric("HIGH Priority", result["total_high"])
+        metric_src.metric("Current Source", "Done ✅")
+        prog_bar.progress(1.0, text="Complete")
+
+        st.success(f"✅ Done — {result['total_new']} new jobs, {result['total_high']} HIGH priority. Exported to {result['export_path']}")
+        st.cache_data.clear()
+        st.rerun()
+
+    st.divider()
+    st.subheader("H1B Detail Enricher")
+    st.caption("Fetches full job pages for NC/SC to extract H1B status, salary, and contact info from complete job descriptions.")
+    col_enrich1, col_enrich2, col_enrich3 = st.columns([1, 1, 2])
+    with col_enrich1:
+        enrich_limit = st.number_input("Max jobs to check", min_value=10, max_value=500, value=200, step=10)
+    with col_enrich2:
+        enrich_states = st.multiselect("States", options=["NC", "SC", "VA", "GA", "TN"], default=["NC", "SC"])
+    with col_enrich3:
+        st.write("")
+        enrich_btn = st.button("🔬 Enrich H1B/Salary/Contact", use_container_width=True)
+
+    if enrich_btn:
+        with st.spinner("Fetching job detail pages…"):
+            from src.detail_enricher import enrich_job_details
+            er = enrich_job_details(states=enrich_states or ["NC", "SC"], limit=int(enrich_limit))
+        st.success(
+            f"✅ Enriched {er['enriched']}/{er['total_checked']} jobs — "
+            f"H1B: {er['h1b_found']} | Salary: {er['salary_found']} | Contact: {er['contact_found']}"
+        )
         st.cache_data.clear()
         st.rerun()
 
@@ -192,16 +286,16 @@ with tab1:
 with tab2:
     st.header("Browse Jobs")
 
-    # Filters
+    # Row 1: States, Visa, Priority, Job Type, Salary
     f1, f2, f3, f4, f5 = st.columns(5)
     with f1:
-        filt_states = st.multiselect("State", options=["NC", "SC"] + [s for s in all_states if s not in ["NC", "SC"]], default=[])
+        filt_states = st.multiselect("State", options=["NC", "SC"] + [s for s in all_states if s not in ["NC", "SC"]], default=["NC", "SC"])
     with f2:
-        filt_visa = st.selectbox("Visa", ["All", "H1B Confirmed", "J1 Confirmed", "Any Visa"])
+        filt_visa = st.selectbox("Visa / H1B", ["All", "H1B Confirmed", "H1B Possible", "J1 Confirmed", "Any Visa"])
     with f3:
         filt_priority = st.selectbox("Priority", ["All", "HIGH", "MEDIUM", "LOW"])
     with f4:
-        filt_specialty = st.selectbox("Specialty", ["All", "Internal Medicine", "Family Medicine"])
+        filt_job_type = st.selectbox("Job Type", ["All", "Permanent", "Locums / Temp", "Hospitalist", "Nocturnist", "Primary Care"])
     with f5:
         filt_salary = st.number_input("Min Salary $", min_value=0, value=0, step=10000)
 
@@ -209,7 +303,7 @@ with tab2:
         state_filter=filt_states or None,
         visa_filter=filt_visa if filt_visa != "All" else None,
         priority_filter=filt_priority if filt_priority != "All" else None,
-        specialty_filter=filt_specialty if filt_specialty != "All" else None,
+        job_type_filter=filt_job_type if filt_job_type != "All" else None,
         salary_min=filt_salary if filt_salary > 0 else None,
     )
 
@@ -219,17 +313,43 @@ with tab2:
     if df.empty:
         st.info("No jobs match your filters. Run the pipeline first.")
     else:
-        # Priority color coding
         def priority_style(val):
-            colors = {"HIGH": "background-color: #d4edda", "MEDIUM": "background-color: #fff3cd", "LOW": ""}
+            colors = {"HIGH": "background-color:#d4edda;color:#155724;font-weight:bold",
+                      "MEDIUM": "background-color:#fff3cd;color:#856404",
+                      "LOW": "color:#6c757d"}
             return colors.get(val, "")
 
-        display_cols = ["Title", "Employer", "City", "State", "Salary (Posted)", "DOL Historical $",
-                        "Contact", "Email", "Phone", "H1B", "J1", "Posted", "Priority", "Score", "Status"]
-        styled = df[display_cols].style.applymap(priority_style, subset=["Priority"])
-        selected_row = st.dataframe(styled, use_container_width=True, on_select="rerun", selection_mode="single-row")
+        def h1b_style(val):
+            colors = {"confirmed": "background-color:#d4edda;color:#155724;font-weight:bold",
+                      "possible": "background-color:#cce5ff;color:#004085",
+                      "no": "background-color:#f8d7da;color:#721c24",
+                      "unknown": "color:#6c757d"}
+            return colors.get(val, "")
 
-        # Download filtered view
+        display_cols = [
+            "Priority", "H1B", "J1", "Title", "Employer", "Location",
+            "Salary (Posted)", "DOL Salary", "Email", "Phone", "Contact",
+            "Posted", "Source", "Apply", "Score", "Status",
+        ]
+        styled = (
+            df[display_cols]
+            .style
+            .map(priority_style, subset=["Priority"])
+            .map(h1b_style, subset=["H1B"])
+        )
+        col_cfg = {
+            "Apply": st.column_config.LinkColumn("Apply Link", display_text="Apply"),
+            "Priority": st.column_config.TextColumn("Priority", width="small"),
+            "H1B": st.column_config.TextColumn("H1B", width="small"),
+            "J1": st.column_config.TextColumn("J1", width="small"),
+            "Score": st.column_config.NumberColumn("Score", width="small"),
+        }
+        selected_row = st.dataframe(
+            styled, use_container_width=True,
+            on_select="rerun", selection_mode="single-row",
+            column_config=col_cfg,
+        )
+
         csv_bytes = df.to_csv(index=False).encode()
         st.download_button("⬇ Download filtered CSV", csv_bytes, "filtered_jobs.csv", "text/csv")
 
@@ -240,31 +360,49 @@ with tab2:
             job = next((j for j in jobs if j.id == job_id), None)
 
             if job:
-                with st.expander(f"📋 {job.title} — {job.employer}", expanded=True):
-                    c1, c2 = st.columns(2)
+                h1b_emoji = {"confirmed": "✅", "possible": "🔵", "no": "❌"}.get(job.h1b_status, "❓")
+                with st.expander(f"{h1b_emoji} {job.title} — {job.employer} | {job.city or ''}, {job.state}", expanded=True):
+                    c1, c2, c3 = st.columns(3)
                     with c1:
+                        st.markdown("**Position**")
+                        st.markdown(f"**Title:** {job.title}")
                         st.markdown(f"**Employer:** {job.employer}")
-                        st.markdown(f"**Location:** {job.city}, {job.state}")
+                        st.markdown(f"**Location:** {job.city or 'N/A'}, {job.state}")
                         st.markdown(f"**Specialty:** {job.specialty or 'N/A'}")
-                        st.markdown(f"**Job Type:** {job.job_type or 'N/A'}")
-                        if job.salary_text:
-                            st.markdown(f"**Salary (Posted):** {job.salary_text}")
-                        if job.dol_salary_min:
-                            st.markdown(f"**DOL Historical:** ${job.dol_salary_min:,}–${job.dol_salary_max:,} ({job.dol_salary_year}, {job.dol_case_count} filings)")
+                        st.markdown(f"**Type:** {job.job_type or 'N/A'}")
+                        st.markdown(f"**Posted:** {job.posted_date or (job.first_seen_at.strftime('%Y-%m-%d') if job.first_seen_at else 'N/A')}")
                     with c2:
-                        st.markdown(f"**H1B:** `{job.h1b_status}`")
-                        st.markdown(f"**J1:** `{job.j1_status}`")
-                        st.markdown(f"**Waiver:** `{job.waiver_status}`")
-                        st.markdown(f"**Contact:** {job.contact_name or 'N/A'}")
+                        st.markdown("**Salary**")
+                        if job.salary_text:
+                            st.markdown(f"**Posted:** {job.salary_text}")
+                        elif job.salary_min:
+                            st.markdown(f"**Posted:** ${job.salary_min:,}–${job.salary_max:,}" if job.salary_max else f"${job.salary_min:,}+")
+                        else:
+                            st.markdown("**Posted:** Not listed")
+                        if job.dol_salary_min:
+                            st.markdown(f"**DOL Historical:** ${job.dol_salary_min:,}–${job.dol_salary_max:,}")
+                            st.caption(f"({job.dol_salary_year}, {job.dol_case_count} H1B filings)")
+                        st.markdown("**Contact**")
+                        st.markdown(f"**Name:** {job.contact_name or 'N/A'}")
                         st.markdown(f"**Email:** {job.contact_email or 'N/A'}")
                         st.markdown(f"**Phone:** {job.contact_phone or 'N/A'}")
-                        st.markdown(f"**Posted:** {job.posted_date or 'N/A'}")
-                        st.markdown(f"**Priority:** **{job.priority_label}** (score {job.priority_score:.0f})")
+                    with c3:
+                        st.markdown("**Visa Sponsorship**")
+                        st.markdown(f"**H1B:** `{job.h1b_status}` {h1b_emoji}")
+                        st.markdown(f"**J1:** `{job.j1_status}`")
+                        st.markdown(f"**Waiver:** `{job.waiver_status}`")
+                        if job.visa_text:
+                            st.caption(f'"{job.visa_text}"')
+                        st.markdown("**Priority**")
+                        st.markdown(f"**Label:** **{job.priority_label}** (score {job.priority_score:.0f})")
+                        st.markdown(f"**Source:** {job.source_name}")
 
-                    st.markdown(f"**Source:** [{job.source_url}]({job.source_url})")
+                    if job.source_url:
+                        st.link_button("Apply / View Full Posting", job.source_url, use_container_width=True)
+
                     if job.short_summary:
-                        st.markdown("**Summary:**")
-                        st.text(job.short_summary[:500])
+                        with st.expander("Job Summary"):
+                            st.text(job.short_summary[:800])
 
                     # Status update
                     col_s1, col_s2, col_s3, col_s4 = st.columns(4)

@@ -32,13 +32,28 @@ job_boards:
   - name: practicelink
     display_name: PracticeLink
     base_url: https://www.practicelink.com
-    method: playwright
+    method: httpx
     enabled: true
 
   - name: practicematch
     display_name: PracticeMatch
     base_url: https://www.practicematch.com
-    method: csv_only
+    method: httpx
+    enabled: true
+
+  - name: workday
+    display_name: Workday ATS (Duke, Atrium, Novant, UNC, WakeMed, MUSC, HCA, CommonSpirit, etc.)
+    method: httpx
+    enabled: true
+
+  - name: icims
+    display_name: iCIMS ATS (Cone, ECU, AdventHealth, Bon Secours, Trinity, Ascension, etc.)
+    method: httpx
+    enabled: true
+
+  - name: taleo
+    display_name: Oracle Taleo (Vanderbilt, Memorial Hermann, UT Health, Sutter, MedStar, etc.)
+    method: httpx
     enabled: true
 
   - name: csv_import

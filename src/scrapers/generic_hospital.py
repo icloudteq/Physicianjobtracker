@@ -1,4 +1,4 @@
-from urllib.parse import urljoin, urlparse
+﻿from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -47,7 +47,7 @@ class GenericHospitalScraper(BaseScraper):
         return jobs
 
     def _extract_jobs(self, html: str, employer: str, source_url: str, state: str, terms: list[str]) -> list[RawJob]:
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         jobs = []
 
         for selector in _JOB_SELECTORS:
@@ -117,3 +117,4 @@ class GenericHospitalScraper(BaseScraper):
             raw_text=raw_text,
             short_summary=raw_text[:400],
         )
+

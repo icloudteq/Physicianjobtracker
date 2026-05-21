@@ -1,4 +1,4 @@
-"""
+﻿"""
 DOL H1B LCA Disclosure Data salary lookup.
 Public data required by law: https://www.dol.gov/agencies/eta/foreign-labor/performance
 SOC codes: 29-1215 (Family Medicine), 29-1216 (Internal Medicine), 29-1229 (Physicians All Other)
@@ -29,7 +29,7 @@ def _find_latest_lca_url() -> Optional[str]:
         with httpx.Client(timeout=30) as client:
             resp = client.get(DOL_PERFORMANCE_URL)
             resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = BeautifulSoup(resp.text, "html.parser")
         for link in soup.find_all("a", href=True):
             href = link["href"]
             if "LCA_Disclosure_Data" in href and href.endswith(".xlsx"):
@@ -181,3 +181,4 @@ def lookup_salary(employer: str, state: str, session: Session) -> dict:
             "dol_case_count": best_match.case_count,
         }
     return {}
+

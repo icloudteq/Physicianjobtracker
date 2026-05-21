@@ -1,0 +1,15 @@
+default_subject: "Interest in {title} Position – {employer}"
+default_body: |
+  Dear Hiring Manager,
+
+  I am writing to express my strong interest in the {title} position at {employer} in {city}, {state}.
+
+  I am a board-eligible/board-certified Internal Medicine physician currently completing my residency training, seeking opportunities in {state}. I am particularly interested in this role due to [reason].
+
+  I would welcome the opportunity to discuss how my skills and experience align with your needs.
+
+  Thank you for your time and consideration.
+
+  Sincerely,
+  {candidate_name}
+  {sender_email}

@@ -1,0 +1,15 @@
+.env
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+data/jobs.db
+data/logs/
+data/exports/
+data/dol_lca/
+config/credentials.json
+config/token.json
+*.egg-info/
+dist/
+build/

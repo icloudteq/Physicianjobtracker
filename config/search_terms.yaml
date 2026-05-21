@@ -1,0 +1,46 @@
+specialty_terms:
+  internal_medicine:
+    - Internal Medicine Physician
+    - Hospitalist
+    - Nocturnist
+    - Primary Care Physician
+    - Outpatient Internal Medicine
+    - Academic Internal Medicine
+    - Internal Medicine Faculty
+    - IM Hospitalist
+    - PCP Internal Medicine
+  family_medicine:
+    - Family Medicine Physician
+    - Family Practice Physician
+    - Family Medicine Doctor
+    - Family Physician
+    - Family Medicine Faculty
+    - Academic Family Medicine
+    - Outpatient Family Medicine
+
+visa_terms:
+  h1b:
+    - H1B
+    - H-1B
+    - H1-B
+    - H-1B sponsorship
+  j1:
+    - J1
+    - J-1
+    - J1 waiver
+    - J-1 waiver
+    - Conrad 30
+  possible:
+    - visa sponsorship
+    - immigration assistance
+    - sponsorship available
+  no:
+    - no visa sponsorship
+    - unable to sponsor
+    - must be authorized to work without sponsorship
+
+candidate:
+  candidate_name: "[Candidate Name]"
+  sender_name: "[Your Name]"
+  sender_email: "[Your Email]"
+  preferred_states: [NC, SC]

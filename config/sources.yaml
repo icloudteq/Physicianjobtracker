@@ -1,0 +1,157 @@
+job_boards:
+  - name: doccafe
+    display_name: DocCafe
+    base_url: https://www.doccafe.com
+    method: httpx
+    enabled: true
+
+  - name: nejm
+    display_name: NEJM CareerCenter
+    base_url: https://careers.nejm.org
+    method: httpx
+    enabled: true
+
+  - name: health_ecareers
+    display_name: Health eCareers
+    base_url: https://www.healthecareers.com
+    method: httpx
+    enabled: true
+
+  - name: jama_career
+    display_name: JAMA Career Center
+    base_url: https://jamanetwork.com
+    method: httpx
+    enabled: true
+
+  - name: hospital_recruiting
+    display_name: HospitalRecruiting.com
+    base_url: https://www.hospitalrecruiting.com
+    method: httpx
+    enabled: true
+
+  - name: practicelink
+    display_name: PracticeLink
+    base_url: https://www.practicelink.com
+    method: playwright
+    enabled: true
+
+  - name: practicematch
+    display_name: PracticeMatch
+    base_url: https://www.practicematch.com
+    method: csv_only
+    enabled: true
+
+  - name: csv_import
+    display_name: Manual CSV Import
+    method: csv_only
+    enabled: true
+
+# NC/SC priority employers — pre-curated career page URLs
+employers:
+  # North Carolina
+  - name: Duke Health
+    state: NC
+    careers_url: https://careers.dukehealth.org/jobs
+    employer_type: academic
+  - name: UNC Health
+    state: NC
+    careers_url: https://jobs.unchealthcare.org
+    employer_type: academic
+  - name: Atrium Health
+    state: NC
+    careers_url: https://careers.atriumhealth.org/physician
+    employer_type: hospital
+  - name: Novant Health
+    state: NC
+    careers_url: https://www.novanthealth.org/careers/physicians
+    employer_type: hospital
+  - name: WakeMed
+    state: NC
+    careers_url: https://www.wakemed.org/careers/physicians
+    employer_type: hospital
+  - name: ECU Health
+    state: NC
+    careers_url: https://ecuhealth.org/careers
+    employer_type: hospital
+  - name: Cone Health
+    state: NC
+    careers_url: https://www.conehealth.com/careers
+    employer_type: hospital
+  - name: CaroMont Health
+    state: NC
+    careers_url: https://www.caromonthealth.org/careers
+    employer_type: hospital
+  - name: Cape Fear Valley Health
+    state: NC
+    careers_url: https://www.capefearvalley.com/careers
+    employer_type: hospital
+  - name: FirstHealth of the Carolinas
+    state: NC
+    careers_url: https://www.firsthealth.org/careers
+    employer_type: hospital
+  - name: Wake Forest Baptist Health
+    state: NC
+    careers_url: https://jobs.wakehealth.edu
+    employer_type: academic
+  # South Carolina
+  - name: MUSC Health
+    state: SC
+    careers_url: https://muschealth.org/careers
+    employer_type: academic
+  - name: Prisma Health
+    state: SC
+    careers_url: https://careers.prismahealth.org
+    employer_type: hospital
+  - name: Tidelands Health
+    state: SC
+    careers_url: https://www.tidelandshealth.org/careers
+    employer_type: hospital
+  - name: Roper St. Francis Healthcare
+    state: SC
+    careers_url: https://www.rsfh.com/careers
+    employer_type: hospital
+  - name: AnMed Health
+    state: SC
+    careers_url: https://www.anmedhealth.org/careers
+    employer_type: hospital
+  - name: Conway Medical Center
+    state: SC
+    careers_url: https://www.conwaymedicalcenter.com/careers
+    employer_type: hospital
+  - name: McLeod Health
+    state: SC
+    careers_url: https://www.mcleodhealth.org/careers
+    employer_type: hospital
+  - name: Palmetto Health
+    state: SC
+    careers_url: https://www.palmettohealth.org/careers
+    employer_type: hospital
+  # National systems
+  - name: HCA Healthcare
+    state: ALL
+    careers_url: https://careers.hcahealthcare.com/jobs
+    employer_type: hospital
+  - name: Tenet Healthcare
+    state: ALL
+    careers_url: https://jobs.tenethealth.com
+    employer_type: hospital
+  - name: CommonSpirit Health
+    state: ALL
+    careers_url: https://jobs.commonspirit.org
+    employer_type: hospital
+  - name: Ascension Health
+    state: ALL
+    careers_url: https://careers.ascension.org
+    employer_type: hospital
+  - name: Kaiser Permanente
+    state: ALL
+    careers_url: https://jobs.kp.org/jobs
+    employer_type: hospital
+  - name: Mayo Clinic
+    state: ALL
+    careers_url: https://jobs.mayoclinic.org
+    employer_type: academic
+  - name: Cleveland Clinic
+    state: ALL
+    careers_url: https://jobs.clevelandclinic.org
+    employer_type: academic

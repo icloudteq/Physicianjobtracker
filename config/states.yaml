@@ -1,0 +1,54 @@
+states:
+  AL: {name: Alabama, search_enabled: true}
+  AK: {name: Alaska, search_enabled: true}
+  AZ: {name: Arizona, search_enabled: true}
+  AR: {name: Arkansas, search_enabled: true}
+  CA: {name: California, search_enabled: true}
+  CO: {name: Colorado, search_enabled: true}
+  CT: {name: Connecticut, search_enabled: true}
+  DE: {name: Delaware, search_enabled: true}
+  FL: {name: Florida, search_enabled: true}
+  GA: {name: Georgia, search_enabled: true}
+  HI: {name: Hawaii, search_enabled: true}
+  ID: {name: Idaho, search_enabled: true}
+  IL: {name: Illinois, search_enabled: true}
+  IN: {name: Indiana, search_enabled: true}
+  IA: {name: Iowa, search_enabled: true}
+  KS: {name: Kansas, search_enabled: true}
+  KY: {name: Kentucky, search_enabled: true}
+  LA: {name: Louisiana, search_enabled: true}
+  ME: {name: Maine, search_enabled: true}
+  MD: {name: Maryland, search_enabled: true}
+  MA: {name: Massachusetts, search_enabled: true}
+  MI: {name: Michigan, search_enabled: true}
+  MN: {name: Minnesota, search_enabled: true}
+  MS: {name: Mississippi, search_enabled: true}
+  MO: {name: Missouri, search_enabled: true}
+  MT: {name: Montana, search_enabled: true}
+  NE: {name: Nebraska, search_enabled: true}
+  NV: {name: Nevada, search_enabled: true}
+  NH: {name: New Hampshire, search_enabled: true}
+  NJ: {name: New Jersey, search_enabled: true}
+  NM: {name: New Mexico, search_enabled: true}
+  NY: {name: New York, search_enabled: true}
+  NC: {name: North Carolina, search_enabled: true, preferred: true}
+  ND: {name: North Dakota, search_enabled: true}
+  OH: {name: Ohio, search_enabled: true}
+  OK: {name: Oklahoma, search_enabled: true}
+  OR: {name: Oregon, search_enabled: true}
+  PA: {name: Pennsylvania, search_enabled: true}
+  RI: {name: Rhode Island, search_enabled: true}
+  SC: {name: South Carolina, search_enabled: true, preferred: true}
+  SD: {name: South Dakota, search_enabled: true}
+  TN: {name: Tennessee, search_enabled: true}
+  TX: {name: Texas, search_enabled: true}
+  UT: {name: Utah, search_enabled: true}
+  VT: {name: Vermont, search_enabled: true}
+  VA: {name: Virginia, search_enabled: true}
+  WA: {name: Washington, search_enabled: true}
+  WV: {name: West Virginia, search_enabled: true}
+  WI: {name: Wisconsin, search_enabled: true}
+  WY: {name: Wyoming, search_enabled: true}
+  DC: {name: District of Columbia, search_enabled: true}
+
+preferred_states: [NC, SC]

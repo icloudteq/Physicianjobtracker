@@ -1,19 +1,23 @@
 # Physician Job Intelligence Tool — Design Spec
 **Date:** 2026-05-20  
 **Status:** Approved  
-**Purpose:** Private daily job intelligence tool for Internal Medicine physician job search across TX, NM, AZ, OK, LA.
+**Purpose:** Private daily job intelligence tool for Internal Medicine and Family Medicine physician job search across all 50 US states. Collects every available posting into one unified table showing salary, contact info (name/email/phone), and visa sponsorship status.
 
 ---
 
 ## 1. Overview
 
 A local Python application that:
-1. Scrapes public physician job boards and hospital career pages
+1. Scrapes 20–30+ public physician job boards and hospital career pages across all 50 states
 2. Stores jobs in SQLite (deduped, enriched, ranked)
-3. Classifies visa sponsorship and salary signals
-4. Exports daily CSV reports
-5. Creates Gmail draft emails for selected jobs
-6. Provides a Streamlit dashboard for interactive control
+3. Extracts salary, contact info (name/email/phone), and posting date from every job
+4. Classifies visa sponsorship signals (H1B/J1/none/unknown)
+5. Sends desktop notifications when new jobs are found
+6. Exports a daily master CSV — one row per job, all fields in one place
+7. Creates Gmail draft emails for selected jobs
+8. Provides a Streamlit dashboard for interactive control
+
+**Primary output:** One unified table/CSV with every job across all states — title, employer, city/state, salary, contact name, contact email, contact phone, H1B status, J1 status, posting date, source URL.
 
 **Legal constraints (hard rules, never bypass):**
 - No login walls, CAPTCHA bypass, paywalls, Cloudflare bypass, or robots-restricted pages
@@ -36,15 +40,17 @@ Streamlit UI (src/dashboard.py)
         │
    ┌────┴──────────────────────────────────────┐
    │           Pipeline Orchestrator            │
-   │  1. state_search    → discover URLs        │
-   │  2. scrapers        → raw job dicts        │
-   │  3. db.py           → upsert jobs          │
-   │  4. dedupe          → mark duplicates      │
-   │  5. salary_parser   → enrich              │
-   │  6. visa_classifier → enrich              │
-   │  7. ranker          → priority score      │
-   │  8. exporters       → CSV + report        │
-   │  9. gmail_drafts    → create drafts       │
+   │  1. state_search      → discover URLs      │
+   │  2. scrapers          → raw job dicts      │
+   │  3. db.py             → upsert jobs        │
+   │  4. dedupe            → mark duplicates    │
+   │  5. salary_parser     → enrich            │
+   │  6. contact_extractor → enrich            │
+   │  7. visa_classifier   → enrich            │
+   │  8. ranker            → priority score    │
+   │  9. exporters         → master CSV        │
+   │  10. notifier         → desktop alert     │
+   │  11. gmail_drafts     → create drafts     │
    └────────────────────────────────────────────┘
         │
    SQLite (data/jobs.db via SQLAlchemy ORM)
@@ -83,12 +89,14 @@ physician_job_tracker/
     logger.py                 # structured logging to file + console
     dedupe.py                 # exact hash + RapidFuzz fuzzy dedup
     salary_parser.py          # regex salary extraction + normalization
+    contact_extractor.py      # extract contact name/email/phone from public posting text
     visa_classifier.py        # strict regex visa signal classification
     ranker.py                 # priority scoring (0-100)
     state_search.py           # generate search queries per state+term
     source_discovery.py       # DuckDuckGo search → discover employer URLs
+    notifier.py               # Windows desktop notifications (new jobs found)
     gmail_drafts.py           # Gmail API v1 OAuth2 draft creation
-    exporters.py              # CSV + Jinja2 summary report generation
+    exporters.py              # master CSV + Jinja2 summary report
     dashboard.py              # Streamlit UI
     scrapers/
       __init__.py
@@ -113,38 +121,29 @@ physician_job_tracker/
 ## 4. Configuration Files
 
 ### config/states.yaml
+
+All 50 US states configured. Each entry:
 ```yaml
 states:
   TX:
     name: Texas
-    preferred_cities: [Houston, Dallas, San Antonio, Austin, El Paso]
-    rural_preferred: true
     search_enabled: true
-  NM:
-    name: New Mexico
-    preferred_cities: [Albuquerque, Santa Fe, Las Cruces]
-    rural_preferred: true
+  CA:
+    name: California
     search_enabled: true
-  AZ:
-    name: Arizona
-    preferred_cities: [Phoenix, Tucson, Scottsdale]
-    rural_preferred: false
+  NY:
+    name: New York
     search_enabled: true
-  OK:
-    name: Oklahoma
-    preferred_cities: [Oklahoma City, Tulsa]
-    rural_preferred: true
-    search_enabled: true
-  LA:
-    name: Louisiana
-    preferred_cities: [New Orleans, Baton Rouge, Shreveport]
-    rural_preferred: false
-    search_enabled: true
+  # ... all 50 states follow the same pattern
+  # search_enabled: false to pause a state without deleting config
 ```
+
+Default: all 50 states enabled. User can toggle individual states off in the Streamlit Sources tab.
 
 ### config/search_terms.yaml
 ```yaml
 specialty_terms:
+  # Internal Medicine
   - Internal Medicine Physician
   - Hospitalist
   - Nocturnist
@@ -154,6 +153,14 @@ specialty_terms:
   - Internal Medicine Faculty
   - IM Hospitalist
   - PCP Internal Medicine
+  # Family Medicine
+  - Family Medicine Physician
+  - Family Practice Physician
+  - Family Medicine Doctor
+  - Family Physician
+  - Family Medicine Faculty
+  - Academic Family Medicine
+  - Outpatient Family Medicine
 
 visa_terms:
   h1b:
@@ -186,11 +193,9 @@ candidate:
 ### config/sources.yaml
 Contains:
 - Per-source enable/disable flags and scrape method (`httpx` | `playwright` | `csv_only`)
-- Pre-curated employer career URLs for TX/NM/AZ/OK/LA
-  (HCA Healthcare, Baylor Scott & White, UNM Health, Banner Health, OU Health, LCMC Health,
-   University Health SA, Christus Health, Presbyterian Healthcare, University of TX systems,
-   VA hospital career portals, FQHC networks)
-- Manual employer URL additions
+- Pre-curated national employer career URLs (major health systems, academic medical centers, VA portals, FQHC networks across all 50 states)
+  Examples: HCA Healthcare, Tenet, CommonSpirit, Ascension, Kaiser, Mayo Clinic, Cleveland Clinic, Johns Hopkins, UCSF, Baylor Scott & White, Mass General Brigham, all VA regional portals, FQHC networks by state
+- Manual employer URL additions via Streamlit UI or direct YAML edit
 
 ---
 
@@ -218,8 +223,11 @@ Contains:
 | h1b_status | TEXT | confirmed \| possible \| no \| unknown |
 | j1_status | TEXT | confirmed \| possible \| no \| unknown |
 | waiver_status | TEXT | likely \| unknown |
+| contact_name | TEXT | only if publicly listed in posting |
 | contact_email | TEXT | only if publicly listed in posting |
 | contact_phone | TEXT | only if publicly listed in posting |
+| posted_date | DATE | date job was posted, extracted from listing |
+| posted_date_raw | TEXT | raw date string from source before parsing |
 | short_summary | TEXT | ≤500 chars, no full description copy |
 | full_text_hash | TEXT | SHA256(title+employer+city+state) |
 | first_seen_at | DATETIME UTC | |
@@ -418,7 +426,7 @@ Score 0–100, assigned at upsert time and recalculated on each scrape:
 | H1B confirmed | +20 |
 | J1 confirmed | +15 |
 | Direct employer (not recruiter) | +10 |
-| In preferred state (TX/NM/AZ) | +10 |
+| Contact info present (name/email/phone) | +10 |
 | Academic / university employer | +8 |
 | FQHC / rural / underserved | +8 |
 | VA hospital | +5 |
@@ -432,20 +440,61 @@ Score 0–100, assigned at upsert time and recalculated on each scrape:
 
 ---
 
-## 12. Exports (src/exporters.py)
+## 12. Contact Extractor (src/contact_extractor.py)
+
+Extracts publicly listed contact info from the job posting text only. Never fetches hidden data.
+
+Regex patterns:
+```python
+EMAIL = r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'
+PHONE = r'(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}'
+NAME  = r'(?:contact|recruiter|reach out to|send.*to)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)'
+```
+
+Rules:
+- Only extract from text that was publicly visible on the posting page
+- Store raw matched values only — no inference
+- If no contact info in posting, all three fields remain NULL
+
+---
+
+## 13. Posting Date Extraction
+
+Every scraper attempts to extract `posted_date` from:
+- Structured `datetime` attributes (ISO 8601 preferred)
+- Text like "Posted 3 days ago" → calculated back from run date
+- Text like "Posted May 15, 2026" → parsed to DATE
+- JSON-LD schema.org `datePosted` field (common on modern career pages)
+
+If extraction fails: `posted_date = NULL`, `posted_date_raw = NULL`. Never guess.
+
+---
+
+## 14. Notifications (src/notifier.py)
+
+Windows desktop toast notification after each pipeline run:
+```
+"Physician Job Tracker: 47 new jobs found (12 HIGH priority)"
+```
+
+Uses `plyer` library (cross-platform, no external service needed). Triggered at end of pipeline run, both from CLI and Streamlit. If 0 new jobs found, no notification sent.
+
+---
+
+## 15. Exports (src/exporters.py)
 
 Output dir: `data/exports/YYYY-MM-DD/`
 
 | File | Contents |
 |---|---|
-| `jobs_all.csv` | Full deduped job list, all columns |
-| `jobs_high_priority.csv` | HIGH priority only |
+| `master_jobs.csv` | **Primary output.** All deduped jobs, all fields: title, employer, city, state, salary_min, salary_max, contact_name, contact_email, contact_phone, h1b_status, j1_status, posted_date, source_url, priority_label |
+| `jobs_high_priority.csv` | HIGH priority only, same columns |
 | `daily_summary.txt` | Jinja2 rendered from `templates/daily_summary.txt` |
 | `scrape_report.txt` | Per-source: found / new / dupes / errors / blocked |
 
 ---
 
-## 13. Gmail Drafts (src/gmail_drafts.py)
+## 16. Gmail Drafts (src/gmail_drafts.py)
 
 - Gmail API v1, OAuth2 flow
 - `credentials.json` from Google Cloud Console (stored in `.env` path)
@@ -457,36 +506,37 @@ Output dir: `data/exports/YYYY-MM-DD/`
 
 ---
 
-## 14. Streamlit Dashboard (src/dashboard.py)
+## 17. Streamlit Dashboard (src/dashboard.py)
 
 Four tabs:
 
 **Tab 1 — Run Pipeline**
-- Multi-select: states (TX/NM/AZ/OK/LA)
-- Multi-select: specialty terms
+- Multi-select: states (all 50, default all enabled)
+- Multi-select: specialty terms (IM + FM terms pre-selected)
 - "Run Now" button → calls `main.run_pipeline(states, terms)`
-- Live log output in text area
+- Live log output in text area showing per-source progress
 
 **Tab 2 — Browse Jobs**
-- Filterable dataframe: state, visa status (H1B/J1), priority label, employer type, status
-- Click row → detail panel: title, employer, city, salary, visa, summary, source URL
-- "Create Gmail Draft" button per job
+- Master table: all jobs with columns — title, employer, city, state, salary, contact name, contact email, contact phone, H1B, J1, posted date, source URL, priority
+- Filter bar: state, visa status (H1B/J1), priority label, employer type, specialty (IM/FM), posting date range
+- Click row → side panel: full detail + "Create Gmail Draft" button
 - "Mark Reviewed / Applied / Rejected" status buttons
+- "Download filtered view as CSV" button
 
 **Tab 3 — Exports**
-- List past export run directories
-- Download buttons for CSV files
+- List past export run directories with job counts
+- Download `master_jobs.csv` and `jobs_high_priority.csv` per run
 - Show daily summary text
 
 **Tab 4 — Sources**
-- Table of all sources with last run stats (found/new/dupes/errors)
+- Table of all 20–30 sources with last run stats (found/new/dupes/errors/blocked)
 - Toggle enable/disable per source
 - "Add employer URL" form → saves to `employers` table + `sources.yaml`
-- Manual CSV import upload for gated sources
+- Manual CSV import upload for gated sources (LinkedIn exports, etc.)
 
 ---
 
-## 15. Error Handling
+## 18. Error Handling
 
 - Every scraper wrapped in `try/except`; failure logged to `data/logs/YYYY-MM-DD.log` and `scrape_runs` table; pipeline continues
 - `robots.txt` checked via `urllib.robotparser` before every new domain; disallowed → skip + log
@@ -496,7 +546,7 @@ Four tabs:
 
 ---
 
-## 16. Tech Stack
+## 19. Tech Stack
 
 | Component | Library |
 |---|---|
@@ -514,6 +564,7 @@ Four tabs:
 | Email | Gmail API v1 (`google-api-python-client`) |
 | Templates | `jinja2` |
 | Dashboard | `streamlit` |
+| Notifications | `plyer` |
 | Regex | stdlib `re` |
 | Hashing | stdlib `hashlib` |
 | robots.txt | stdlib `urllib.robotparser` |
@@ -522,7 +573,7 @@ Python 3.11+. All dependencies pinned in `requirements.txt`.
 
 ---
 
-## 17. Environment Variables (.env)
+## 20. Environment Variables (.env)
 
 ```
 GMAIL_CREDENTIALS_PATH=config/credentials.json
@@ -535,7 +586,7 @@ EXPORT_DIR=data/exports
 
 ---
 
-## 18. Out of Scope (MVP)
+## 21. Out of Scope (MVP)
 
 - Cloud hosting / remote access
 - Multi-user support

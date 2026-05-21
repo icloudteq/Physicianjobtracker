@@ -39,7 +39,7 @@ visa_terms:
     - visa support
     - work authorization
     - sponsorship considered
-  no:
+  "no":
     - no visa sponsorship
     - unable to sponsor
     - must be authorized to work without sponsorship

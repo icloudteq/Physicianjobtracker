@@ -95,6 +95,6 @@ TOP 10 HIGH PRIORITY JOBS:
 """
 
     path = EXPORT_DIR / f"daily_summary_{_today()}.txt"
-    path.write_text(report)
+    path.write_text(report, encoding="utf-8")
     log.info(f"Summary report: {path}")
     return report

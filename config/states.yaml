@@ -1,0 +1,168 @@
+states:
+  NC:
+    name: North Carolina
+    priority: high
+    search_enabled: true
+    rural_preference: true
+    preferred_cities:
+      - Charlotte
+      - Raleigh
+      - Durham
+      - Greensboro
+      - Winston-Salem
+      - Wilmington
+      - Asheville
+      - Greenville
+    key_employers:
+      - name: Duke Health
+        careers_url: https://careers.dukehealth.org
+        ats: workday
+        workday_tenant: dukehealth
+      - name: UNC Health
+        careers_url: https://jobs.unchealthcare.org
+        ats: workday
+        workday_tenant: unchealth
+      - name: Atrium Health
+        careers_url: https://careers.atriumhealth.org
+        ats: workday
+        workday_tenant: atriumhealth
+      - name: Novant Health
+        careers_url: https://jobs.novanthealthcareers.com
+        ats: icims
+        icims_id: 19579
+      - name: WakeMed
+        careers_url: https://careers.wakemed.org
+        ats: generic
+      - name: ECU Health
+        careers_url: https://careers.ecuhealth.org
+        ats: generic
+      - name: Cone Health
+        careers_url: https://careers.conehealth.com
+        ats: icims
+        icims_id: 5400
+      - name: Cape Fear Valley Health
+        careers_url: https://careers.capefearvalley.com
+        ats: generic
+      - name: New Hanover Regional Medical Center
+        careers_url: https://jobs.novanthealthcareers.com
+        ats: icims
+        icims_id: 19579
+      - name: Mission Health
+        careers_url: https://missionhealth.org/careers
+        ats: generic
+      - name: CaroMont Health
+        careers_url: https://careers.caromont.org
+        ats: generic
+      - name: Vidant Health
+        careers_url: https://careers.ecuhealth.org
+        ats: generic
+
+  SC:
+    name: South Carolina
+    priority: high
+    search_enabled: true
+    rural_preference: true
+    preferred_cities:
+      - Columbia
+      - Charleston
+      - Greenville
+      - Spartanburg
+      - Myrtle Beach
+      - Florence
+      - Anderson
+    key_employers:
+      - name: MUSC Health
+        careers_url: https://muschealth.org/careers
+        ats: workday
+        workday_tenant: musc
+      - name: Prisma Health
+        careers_url: https://careers.prismahealth.org
+        ats: workday
+        workday_tenant: prismahealth
+      - name: Roper St. Francis Healthcare
+        careers_url: https://careers.rsfh.com
+        ats: icims
+        icims_id: 26300
+      - name: AnMed Health
+        careers_url: https://www.anmedhealth.org/careers
+        ats: generic
+      - name: Tidelands Health
+        careers_url: https://www.tidelandshealth.org/careers
+        ats: generic
+      - name: Conway Medical Center
+        careers_url: https://www.conwaymedicalcenter.com/careers
+        ats: generic
+      - name: Beaufort Memorial Hospital
+        careers_url: https://www.bmhsc.org/careers
+        ats: generic
+      - name: Self Regional Healthcare
+        careers_url: https://www.selfregional.org/careers
+        ats: generic
+      - name: McLeod Health
+        careers_url: https://careers.mcleodhealth.org
+        ats: generic
+      - name: Lexington Medical Center
+        careers_url: https://www.lexmed.com/careers
+        ats: generic
+
+  TX:
+    name: Texas
+    priority: normal
+    search_enabled: true
+    rural_preference: false
+    preferred_cities:
+      - Houston
+      - Dallas
+      - San Antonio
+      - Austin
+      - Fort Worth
+      - El Paso
+    key_employers: []
+
+  NM:
+    name: New Mexico
+    priority: normal
+    search_enabled: true
+    rural_preference: true
+    preferred_cities:
+      - Albuquerque
+      - Santa Fe
+      - Las Cruces
+      - El Paso area
+    key_employers: []
+
+  AZ:
+    name: Arizona
+    priority: normal
+    search_enabled: true
+    rural_preference: false
+    preferred_cities:
+      - Phoenix
+      - Tucson
+      - Scottsdale
+      - Mesa
+      - Tempe
+    key_employers: []
+
+  OK:
+    name: Oklahoma
+    priority: normal
+    search_enabled: true
+    rural_preference: true
+    preferred_cities:
+      - Oklahoma City
+      - Tulsa
+      - Norman
+    key_employers: []
+
+  LA:
+    name: Louisiana
+    priority: normal
+    search_enabled: true
+    rural_preference: true
+    preferred_cities:
+      - New Orleans
+      - Baton Rouge
+      - Shreveport
+      - Lafayette
+    key_employers: []

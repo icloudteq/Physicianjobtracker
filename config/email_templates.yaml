@@ -1,0 +1,18 @@
+templates:
+  general_inquiry:
+    subject: "Interest in {title} Position – Internal Medicine Physician"
+    body_template: job_email_draft.txt
+
+  academic:
+    subject: "Faculty Application Interest – {title} at {employer}"
+    body_template: academic_email_draft.txt
+
+  urgent_high_priority:
+    subject: "Physician Application – {title} | {employer} | {city}, {state}"
+    body_template: job_email_draft.txt
+
+settings:
+  default_template: general_inquiry
+  include_cv_note: true
+  include_visa_note: true
+  auto_draft_threshold: 80

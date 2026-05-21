@@ -1,0 +1,122 @@
+job_boards:
+  doccafe:
+    name: DocCafe
+    enabled: true
+    type: job_board
+    scrape_method: requests
+    base_url: https://www.doccafe.com
+    search_url: https://www.doccafe.com/physician-jobs/{state_lower}/internal-medicine
+    rate_limit: 3.0
+    notes: "Public listings, no login required"
+
+  hospital_recruiting:
+    name: HospitalRecruiting
+    enabled: true
+    type: job_board
+    scrape_method: requests
+    base_url: https://www.hospitalrecruiting.com
+    search_url: https://www.hospitalrecruiting.com/physician-jobs/internal-medicine/{state_lower}
+    rate_limit: 3.0
+    notes: "Public listings"
+
+  nejm:
+    name: NEJM CareerCenter
+    enabled: true
+    type: job_board
+    scrape_method: requests
+    base_url: https://www.nejmcareercenter.org
+    search_url: https://www.nejmcareercenter.org/jobs/?q=internal+medicine&l={state}
+    rate_limit: 4.0
+    notes: "May work, monitor for blocks"
+
+  health_ecareers:
+    name: Health eCareers
+    enabled: true
+    type: job_board
+    scrape_method: requests
+    base_url: https://www.healthecareers.com
+    search_url: https://www.healthecareers.com/jobs?specialty=internal-medicine&location={state}
+    rate_limit: 4.0
+    notes: "May work, monitor for blocks"
+
+  jama_career:
+    name: JAMA Career Center
+    enabled: true
+    type: job_board
+    scrape_method: requests
+    base_url: https://jamanetwork.com/journals/jama/pages/career-center
+    search_url: https://careers.jamanetwork.com/jobs?q=internal+medicine&location={state}
+    rate_limit: 4.0
+    notes: "Check if public access works"
+
+  mdjobsite:
+    name: MDJobSite
+    enabled: true
+    type: job_board
+    scrape_method: requests
+    base_url: https://www.mdsjobsite.com
+    search_url: https://www.mdsjobsite.com/jobs/?specialty=internal-medicine&state={state}
+    rate_limit: 3.0
+    notes: "Public listings"
+
+  practicelink:
+    name: PracticeLink
+    enabled: false
+    type: job_board
+    scrape_method: manual_import
+    base_url: https://www.practicelink.com
+    notes: "Cloudflare blocked. Requires login. Use manual CSV import."
+    import_path: data/manual_imports/practicelink.csv
+
+  practicematch:
+    name: PracticeMatch
+    enabled: false
+    type: job_board
+    scrape_method: manual_import
+    base_url: https://www.practicematch.com
+    notes: "Cloudflare blocked. Requires login. Use manual CSV import."
+    import_path: data/manual_imports/practicematch.csv
+
+  acp_career:
+    name: ACP Career Connection
+    enabled: true
+    type: job_board
+    scrape_method: requests
+    base_url: https://careers.acponline.org
+    search_url: https://careers.acponline.org/jobs?q=internal+medicine&location={state}
+    rate_limit: 4.0
+    notes: "ACP public job board"
+
+ats_systems:
+  workday:
+    name: Workday ATS
+    enabled: true
+    scrape_method: playwright
+    notes: "ATS used by Duke, UNC, Atrium, MUSC, Prisma"
+
+  icims:
+    name: iCIMS ATS
+    enabled: true
+    scrape_method: requests
+    notes: "ATS used by Novant, Cone, Roper"
+
+  taleo:
+    name: Taleo ATS
+    enabled: true
+    scrape_method: requests
+    notes: "Older ATS system"
+
+manual_import:
+  csv_columns_required:
+    - title
+    - employer
+    - state
+    - city
+  csv_columns_optional:
+    - salary_text
+    - visa_text
+    - apply_url
+    - source_url
+    - job_type
+    - contact_email
+    - contact_phone

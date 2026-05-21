@@ -1,0 +1,26 @@
+Dear Hiring Team,
+
+I am writing to express my interest in the {title} position at {employer} in {city}, {state}.
+
+{candidate_name} is a board-eligible Internal Medicine physician completing residency training, with strong clinical skills in inpatient and outpatient medicine. She is actively seeking opportunities in {state} and surrounding regions.
+
+Highlights:
+- Board-eligible Internal Medicine physician
+- Strong inpatient and outpatient clinical skills
+- Committed to evidence-based, patient-centered care
+- Open to H1B/J1 visa sponsorship if applicable
+
+She would welcome the opportunity to learn more about this position and discuss how her skills and dedication can contribute to your team.
+
+Please feel free to reach out at your convenience.
+
+Best regards,
+{sender_name}
+{sender_email}
+
+---
+Position: {title}
+Employer: {employer}
+Location: {city}, {state}
+Job Source: {source_name}
+Apply Link: {apply_url}
